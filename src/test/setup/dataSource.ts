@@ -9,8 +9,11 @@
 import * as fs from 'fs';
 import { DataSource } from 'typeorm';
 
-import { User } from '../entity/User.entity';
+import { Author } from '../entity/Author.entity';
+import { Book } from '../entity/Book.entity';
 import { Post } from '../entity/Post.entity';
+import { Review } from '../entity/Review.entity';
+import { User } from '../entity/User.entity';
 
 /**
  * Единый DataSource на весь прогон: поднимается один раз в `setup.ts`, схема пересоздаётся
@@ -22,7 +25,7 @@ export const dataSource = new DataSource({
   database: ':memory:',
   // Схему строим из декораторов сущностей, миграции в тестах не нужны.
   synchronize: true,
-  entities: [User, Post],
+  entities: [User, Post, Author, Book, Review],
   // Включите на время отладки, чтобы увидеть реальный SQL, который собрал QueryBuilder.
   logging: false,
 });

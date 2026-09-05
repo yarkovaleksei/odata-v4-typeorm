@@ -9,6 +9,9 @@
  *
  * Остальные ключи (`$filter`, `$orderby`, …) копируются как есть в поверхностный клон объекта.
  *
+ * `$top` отличает «не передан» (`undefined`) от «передан ноль» (`0`): по OData v4, раздел 11.2.6.4,
+ * `$top=0` — корректный запрос пустой страницы, а не синоним отсутствия лимита.
+ *
  * ЧЕГО ЗДЕСЬ НЕТ (и что стоит держать в голове на уровне приложения):
  * - валидации диапазона: отрицательный `$top` доходит до `take(-5)` и молча игнорируется TypeORM,
  *   а слишком большой (`$top=999999999999`) валит уже парсер OData ошибкой `Fail at 0`;
@@ -50,21 +53,42 @@ function booleanByString(value?: 'true' | 'false' | string | boolean) {
 }
 
 /**
- * Безопасное приведение к целому для `$top`/`$skip`: пустые и пробельные строки → `0`;
- * для строк используется `parseInt(..., 10)` (дробная часть отбрасывается, как в тестах для `'3.14'`).
+ * Безопасное приведение к целому для `$skip`: пустые и пробельные строки → `0`;
+ * для строк используется `parseInt(..., 10)` (дробная часть отбрасывается: `'3.14'` → `3`).
  */
 function toNumber(value?: string | number): number {
-  if (typeof value === 'number') return value;
+  return toOptionalNumber(value) ?? 0;
+}
 
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) return 0;
-
-    const parsed = parseInt(trimmed, 10);
-    return Number.isNaN(parsed) ? 0 : parsed;
+/**
+ * Приведение к целому с сохранением различия «параметр не передан» и «передан ноль».
+ *
+ * Нужно для `$top`: по OData v4 (раздел 11.2.6.4) `$top=0` — корректный запрос,
+ * означающий «вернуть пустую страницу», тогда как отсутствие `$top` означает
+ * «лимита нет». Если оба случая свести к `0`, различить их дальше по конвейеру
+ * уже невозможно.
+ *
+ * Нечисловая строка (`'invalid'`) даёт `0`, а не `undefined`: это всё же переданное
+ * значение, просто некорректное, и трактовать его как «лимита нет» опаснее.
+ */
+function toOptionalNumber(value?: string | number): number | undefined {
+  if (typeof value === 'number') {
+    return value;
   }
 
-  return 0;
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const parsed = parseInt(trimmed, 10);
+
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 /**
@@ -92,26 +116,9 @@ export const parseQueryParams = (query: ParsedQueryParams | QueryParams): Parsed
       ? query.$search.trim()
       : undefined;
 
-  // МЁРТВЫЙ КОД. Весь блок ниже вычисляет parsedQuery.$top, который безусловно перезаписывается
-  // строкой `parsedQuery.$top = toNumber(query.$top)` сразу после него. Логика при этом дублирует
-  // toNumber(), разве что без trim() перед parseInt. Удаляется без изменения поведения —
-  // см. `docs/roadmap.md`, задача R-21.
-  if (typeof query.$top === 'string' && query.$top.trim().length > 0) {
-    const $top = parseInt(query.$top, 10);
-
-    if (!isNaN($top)) {
-      parsedQuery.$top = $top;
-    } else {
-      parsedQuery.$top = 0;
-    }
-  } else if (typeof query.$top === 'number') {
-    parsedQuery.$top = query.$top;
-  } else {
-    parsedQuery.$top = 0;
-  }
-
-  // Единственные строки, реально определяющие итоговые значения.
-  parsedQuery.$top = toNumber(query.$top);
+  // $top сохраняет различие «не передан» (undefined) и «передан ноль» (0) — см. toOptionalNumber.
+  parsedQuery.$top = toOptionalNumber(query.$top);
+  // Для $skip такое различие не нужно: skip(0) и отсутствие смещения — это одно и то же.
   parsedQuery.$skip = toNumber(query.$skip);
   // Отсутствующий $count → true (см. @remarks выше); присутствующий разбирается строго.
   parsedQuery.$count = typeof query.$count === 'undefined' ? true : booleanByString(query.$count);

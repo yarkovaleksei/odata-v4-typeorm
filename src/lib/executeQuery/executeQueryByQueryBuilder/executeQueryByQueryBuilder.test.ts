@@ -25,6 +25,8 @@ describe('executeQueryByQueryBuilder', () => {
       expressionMap: { mainAlias: { name: 'defaultAlias' } },
       connection: {
         getMetadata: jest.fn().mockReturnValue({}),
+        // options.type читается для выбора диалекта SQL-функций (LENGTH против LEN и т.п.).
+        options: { type: 'sqlite' },
       },
     } as unknown as jest.Mocked<SelectQueryBuilder<ObjectLiteral>>;
 
@@ -51,9 +53,17 @@ describe('executeQueryByQueryBuilder', () => {
     expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('1 = 1');
     expect(mockQueryBuilder.setParameters).toHaveBeenCalledWith({});
     expect(mockQueryBuilder.skip).toHaveBeenCalledWith(0);
-    expect(mockQueryBuilder.take).not.toHaveBeenCalled(); // $top = 0, не вызываем take
+    // $top='0' — это явно запрошенная пустая страница (OData v4, раздел 11.2.6.4),
+    // поэтому take(0) вызывается. «Лимита нет» выражается отсутствием $top, а не нулём.
+    expect(mockQueryBuilder.take).toHaveBeenCalledWith(0);
     expect(mockQueryBuilder.getManyAndCount).toHaveBeenCalled(); // $count по умолчанию true
     expect(mockQueryBuilder.getMany).not.toHaveBeenCalled();
+  });
+
+  it('не вызывает take, если $top не передан', async () => {
+    await executeQueryByQueryBuilder(mockQueryBuilder, { $search: undefined, $skip: '0' });
+
+    expect(mockQueryBuilder.take).not.toHaveBeenCalled();
   });
 
   it('должен использовать явный select из odataQuery, если он указан', async () => {
@@ -94,17 +104,23 @@ describe('executeQueryByQueryBuilder', () => {
     expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('defaultAlias.created', 'DESC');
   });
 
-  it('должен игнорировать orderby равный "1"', async () => {
+  /**
+   * `'1'` — значение `orderby` по умолчанию у базового посетителя (`ORDER BY 1` в чистом SQL).
+   * Конвейер трактует его как «сортировка не задана» и не должен добавлять ничего в запрос.
+   *
+   * Прежняя версия этого теста передавала `$orderby: '1'` как параметр запроса и проверяла
+   * вызов `addOrderBy('ASC', undefined)` — то есть закрепляла заведомо бессмысленный результат
+   * и при этом не проверяла собственно умолчание. Здесь проверяется именно оно.
+   */
+  it('не добавляет сортировку, если $orderby не передан', async () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
-      $orderby: '1',
       $top: '0',
       $skip: '0',
       $count: 'false',
     });
 
-    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledTimes(1);
-    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('ASC', undefined);
+    expect(mockQueryBuilder.addOrderBy).not.toHaveBeenCalled();
   });
 
   it('должен обработать поиск ($search) через processSearch', async () => {

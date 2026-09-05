@@ -120,6 +120,13 @@ const result = await executeQuery(repo, { ...req.query, $count: 'false' }, { ali
 // result: User[]
 ```
 
+Получить только счётчик, без строк — `$top=0`:
+
+```ts
+const result = await executeQuery(repo, { $top: '0', $count: 'true' }, { alias: 'User' });
+// { items: [], count: 42 }
+```
+
 Всегда возвращать счётчик — ничего делать не нужно, это поведение по умолчанию.
 
 > Каждый запрос со счётчиком делает **два** обращения к БД. Если счётчик не нужен,
@@ -378,43 +385,35 @@ curl "http://localhost:3001/api/users?\$filter=name%20eq%20'Alice'"
 
 ## Чего делать не стоит
 
-**Не комбинируйте `$expand` и фильтр/сортировку по той же связи** — получите ошибку СУБД
-(дефект A-02):
+**Ставьте явные скобки вокруг `not`.** Парсер разбирает `not (X) and Y` как `not (X and Y)` —
+приоритет ниже, чем требует спецификация:
 
 ```bash
-# ❌ SQLITE_ERROR: no such column: posts.title
-GET /api/users?$expand=posts&$filter=posts/title eq 'x'
+# ❌ читается как not (X and Y) — вернёт не то, что вы ожидаете
+GET /api/users?$filter=not (name eq 'Alice') and id gt 10
 
-# ✅ фильтр по связи без $expand
+# ✅ явные внешние скобки задают нужную группировку
+GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
+
+# ✅ либо поставьте not последним
+GET /api/users?$filter=id gt 10 and not (name eq 'Alice')
+```
+
+**Не рассчитывайте на `in` и лямбды `any` / `all`** — их не разбирает парсер, запрос будет
+отвергнут с `ODataUnsupportedError`:
+
+```bash
+# ❌ ODataUnsupportedError
+GET /api/users?$filter=posts/any(p: p/title eq 'x')
+
+# ✅ фильтр по пути связи — семантика близка к any
 GET /api/users?$filter=posts/title eq 'x'
-```
 
-**Не смешивайте LIKE-функции (`contains` / `startswith` / `endswith`) с обычными сравнениями
-в одном `$filter`** — вернётся неверный результат без ошибки (дефект A-01):
+# ❌ Unexpected character
+GET /api/users?$filter=id in (1,2,3)
 
-```bash
-# ❌ молча вернёт не те строки
-GET /api/users?$filter=name eq 'Alice' and contains(email,'alice')
-
-# ✅ безопасно: только сравнения
-GET /api/users?$filter=name eq 'Alice' and id gt 1
-
-# ✅ безопасно: только LIKE-функции
-GET /api/users?$filter=contains(email,'alice') and startswith(name,'A')
-```
-
-Формально ломается любой `$filter`, где перед LIKE-функцией уже встретился хотя бы один
-обычный литерал. Частный случай `contains(...) and <сравнение>` из двух термов отрабатывает
-верно, но полагаться на это не стоит — при добавлении третьего условия он сломается.
-
-**Не рассчитывайте на `not`** — условие исчезнет и вернётся вся таблица (дефект A-11):
-
-```bash
-# ❌ вернёт всех пользователей
-GET /api/users?$filter=not (name eq 'Alice')
-
-# ✅ используйте ne
-GET /api/users?$filter=name ne 'Alice'
+# ✅ разверните в or
+GET /api/users?$filter=id eq 1 or id eq 2 or id eq 3
 ```
 
 **Не оставляйте `$top` неограниченным на публичном API.** Верхней границы у библиотеки нет —

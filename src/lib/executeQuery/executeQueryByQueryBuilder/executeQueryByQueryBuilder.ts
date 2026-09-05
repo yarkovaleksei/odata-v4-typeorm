@@ -63,9 +63,14 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   };
   const alias = localOptions.alias || (inputQueryBuilder.expressionMap.mainAlias?.name ?? '');
 
-  // Преобразуем параметры в OData-строку и затем в объект odataQuery
+  // Преобразуем параметры в OData-строку и затем в объект odataQuery.
+  // Диалект берётся из подключения: от него зависит, какие SQL-функции подставлять
+  // для функций OData (LENGTH против LEN, strftime против EXTRACT и т.д.).
   const odataString = queryToOdataString(parsedQueryWithoutSearch);
-  const odataQuery = createQuery(odataString, { alias });
+  const odataQuery = createQuery(odataString, {
+    alias,
+    dialect: inputQueryBuilder.connection.options.type,
+  });
 
   // Метаданные сущности нужны для двух вещей: списка колонок SELECT по умолчанию
   // и разрешения связей при обработке $expand.
@@ -125,9 +130,11 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // смещения и не переводит запрос в режим пагинации через подзапрос.
   queryBuilder = queryBuilder.skip(parsedQueryWithoutSearch.$skip);
 
-  // $top === 0 трактуется как «лимита нет» (а не «вернуть ноль строк»): и отсутствующий,
-  // и нечисловой $top нормализуются в 0 в parseQueryParams.
-  if (parsedQueryWithoutSearch.$top) {
+  // Проверка именно на undefined, а не на истинность: `$top=0` по OData v4 (раздел 11.2.6.4) —
+  // корректный запрос пустой страницы, и его нельзя приравнивать к отсутствию лимита.
+  // TypeORM корректно обрабатывает take(0): вернётся ноль строк, а count при $count=true
+  // по-прежнему посчитает всю выборку.
+  if (parsedQueryWithoutSearch.$top !== undefined) {
     queryBuilder = queryBuilder.take(parsedQueryWithoutSearch.$top);
   }
 

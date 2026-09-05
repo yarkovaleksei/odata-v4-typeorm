@@ -98,19 +98,29 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc"
 
 | Опция | Статус | Пример |
 |---|---|---|
-| `$filter` | ⚠️ | `$filter=name eq 'Alice' and id gt 10` |
-| `$select` | ✅ | `$select=id,name` |
-| `$orderby` | ⚠️ | `$orderby=name desc,id asc` |
+| `$filter` | ✅ | `$filter=name eq 'Alice' and id gt 10` |
+| `$select` | ✅ | `$select=id,name` — в том числе `$select=author/name` |
+| `$orderby` | ✅ | `$orderby=name desc,id asc` |
 | `$top` / `$skip` | ✅ | `$top=20&$skip=40` |
-| `$count` | ⚠️ | `$count=false` — включён по умолчанию |
-| `$expand` | ⚠️ | `$expand=posts($select=id,title)` |
-| `$search` | ⚠️ | `$search=alice` |
+| `$count` | ⚠️ | `$count=false` — **включён по умолчанию**, отступление от спецификации |
+| `$expand` | ⚠️ | `$expand=posts($select=id,title)` — вложенные `$top`/`$skip` игнорируются |
+| `$search` | ⚠️ | `$search=alice` — упрощённая семантика, только корневая сущность |
 
-Оговорки (⚠️) существенные — полная матрица с проверенным поведением каждого оператора
-и каждой функции: **[docs/odata-support.md](./docs/odata-support.md)**.
+В `$filter` поддержаны все операторы сравнения, логика (`and` / `or` / `not` / скобки),
+арифметика (`add`, `sub`, `mul`, `div`, `mod`, унарный минус), `null` → `IS NULL`,
+пути по связям (`author/name`) и функции: `contains`, `startswith`, `endswith`, `tolower`,
+`toupper`, `trim`, `length`, `indexof`, `substring`, `concat`, `round`, `floor`, `ceiling`,
+`year` / `month` / `day` / `hour` / `minute` / `second`, `now`.
 
-Короткая версия: `not`, арифметика (`add`, `sub`, `mul`, `div`, `mod`), `in`, лямбды
-(`any` / `all`), `$apply`, `$compute` — **не работают**.
+SQL для функций подбирается под вашу СУБД автоматически (`LENGTH` против `LEN`,
+`EXTRACT` против `strftime` и т.д.) — диалект берётся из подключения TypeORM.
+
+**Не поддерживаются:** `in`, лямбды `any` / `all`, `replace`, `cast`, геопространственные
+функции, `$apply`, `$compute`, `$levels`, `$skiptoken`. Такой запрос не выполняется молча —
+он отвергается с `ODataUnsupportedError`.
+
+Полная матрица с проверенным поведением каждого оператора и каждой функции, включая таблицу
+генерируемого SQL по диалектам: **[docs/odata-support.md](./docs/odata-support.md)**.
 
 ## Способы использования
 
@@ -252,6 +262,12 @@ GET /api/users?$orderby=name desc,id asc
 # Пагинация
 GET /api/users?$top=20&$skip=40
 GET /api/users?$top=20&$count=false      # ответ — массив, без счётчика
+GET /api/users?$top=0&$count=true        # только счётчик, без строк
+
+# Логика и арифметика
+GET /api/users?$filter=(not (name eq 'Alice')) and id gt 1
+GET /api/users?$filter=id mul 2 eq 10
+GET /api/users?$filter=length(name) gt 3
 
 # Связи
 GET /api/users?$expand=posts
@@ -313,6 +329,26 @@ executeQuery(repo, query, { alias: 'u' });     // ❌ Error: No metadata for "u"
 То же касается `SelectQueryBuilder`: привычный `createQueryBuilder('u')` не подойдёт,
 нужен `createQueryBuilder('User')`.
 
+### Неподдерживаемое отвергается, а не игнорируется
+
+Если библиотека не может транслировать часть запроса, она бросает `ODataUnsupportedError`,
+а не выполняет запрос без этой части. Это осознанное правило: молча вернуть больше данных,
+чем просил клиент, опаснее явной ошибки.
+
+```ts
+import { ODataUnsupportedError } from 'odata-v4-typeorm-improved';
+
+try {
+  await executeQuery(repo, req.query, { alias: 'User' });
+} catch (e) {
+  if (e instanceof ODataUnsupportedError) {
+    return res.status(400).json({ message: e.message, feature: e.feature });
+  }
+
+  throw e;
+}
+```
+
 ### Защита от SQL-инъекций
 
 Значения из `$filter` и `$search` никогда не попадают в SQL напрямую — они уходят в
@@ -329,31 +365,25 @@ executeQuery(repo, query, { alias: 'u' });     // ❌ Error: No metadata for "u"
 Перед внедрением стоит знать. Полный разбор с воспроизведением — в
 [docs/audit.md](./docs/audit.md).
 
-**Не сработает как ожидается:**
+**Приоритет `not` ниже, чем требует спецификация.** `odata-v4-parser` разбирает
+`not (X) and Y` как `not (X and Y)`. Ставьте явные скобки:
 
 ```bash
-# ❌ вернёт ВСЮ таблицу: оператор not молча отбрасывается
-GET /api/users?$filter=not (name eq 'Alice')
-# ✅ используйте ne
-GET /api/users?$filter=name ne 'Alice'
-
-# ❌ ошибка СУБД: алиасы $expand и пути в фильтре не совпадают
-GET /api/users?$expand=posts&$filter=posts/title eq 'x'
-# ✅ фильтр по связи без $expand
-GET /api/users?$filter=posts/title eq 'x'
-
-# ❌ молча вернёт не те строки: плейсхолдеры LIKE сбивают нумерацию
-GET /api/users?$filter=name eq 'Alice' and contains(email,'alice')
-# ✅ либо только сравнения, либо только LIKE-функции
-GET /api/users?$filter=contains(email,'alice') and startswith(name,'A')
+# ❌ читается как not (X and Y)
+GET /api/users?$filter=not (name eq 'Alice') and id gt 10
+# ✅ явные внешние скобки
+GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
 ```
 
-**Не поддерживается вовсе:** `not`, арифметика, `in`, `any` / `all`, `$apply`, `$compute`,
-`$levels`, `$skiptoken`, вложенные `$top` / `$skip` внутри `$expand`.
+**`alias` не может быть произвольным** — см. раздел выше.
 
-**Ограничения по СУБД:** `$search` не работает при нестандартной `namingStrategy` (snake_case)
-и на MySQL; функции `length`, `now`, `indexof`, `trim` генерируются без учёта диалекта.
-Регулярно проверяется в CI только SQLite.
+**Не поддерживается:** `in`, лямбды `any` / `all`, `replace`, `cast`, геопространственные
+функции, `$apply`, `$compute`, `$levels`, `$skiptoken`, вложенные `$top` / `$skip`
+внутри `$expand`. Все эти случаи отвергаются явной ошибкой, а не выполняются частично.
+
+**Ограничения по СУБД:** `$search` не работает при нестандартной `namingStrategy`
+(snake_case) и на MySQL. Трансляция функций корректна для PostgreSQL, MySQL, SQLite
+и MS SQL, но прогоном на живой БД в CI проверяется только SQLite.
 
 ## Документация
 

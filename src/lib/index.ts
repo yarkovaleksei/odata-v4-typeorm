@@ -15,6 +15,7 @@
  */
 export * from './TypeOrmVisitor';
 export * from './createFilter';
+export * from './errors';
 export * from './createQuery';
 export * from './executeQuery';
 export * from './ODataQueryMiddleware';

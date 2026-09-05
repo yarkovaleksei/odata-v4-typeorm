@@ -63,21 +63,33 @@ describe('parseQueryParams', () => {
       expect(result.$top).toBe(20);
     });
 
-    it('должен установить значение по умолчанию 0, если $top не передан', () => {
+    /**
+     * Отсутствие `$top` и `$top=0` — разные вещи, и различие обязано дожить до конвейера:
+     * по OData v4 (раздел 11.2.6.4) `$top=0` означает «вернуть пустую страницу», а отсутствие
+     * параметра — «лимита нет». Если оба свести к `0`, различить их дальше уже невозможно.
+     */
+    it('должен вернуть undefined, если $top не передан', () => {
       const query: QueryParams = {};
       const result = parseQueryParams(query);
 
-      expect(result.$top).toBe(0);
+      expect(result.$top).toBeUndefined();
     });
 
-    it('должен установить значение по умолчанию 0, если $top равен null', () => {
+    it('должен вернуть undefined, если $top равен null', () => {
       const query = { $top: null as never };
       const result = parseQueryParams(query);
 
-      expect(result.$top).toBe(0);
+      expect(result.$top).toBeUndefined();
     });
 
-    it('должен преобразовать строку "0" в 0', () => {
+    it('должен вернуть undefined, если $top — пустая строка', () => {
+      const query: QueryParams = { $top: '   ' };
+      const result = parseQueryParams(query);
+
+      expect(result.$top).toBeUndefined();
+    });
+
+    it('должен преобразовать строку "0" в 0, а не в undefined', () => {
       const query: QueryParams = { $top: '0' };
       const result = parseQueryParams(query);
 

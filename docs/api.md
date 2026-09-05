@@ -10,6 +10,7 @@ import {
   createQuery,
   createFilter,
   TypeOrmVisitor,
+  ODataUnsupportedError,
   parseQueryParams,
   queryToOdataString,
   mapToObject,
@@ -18,7 +19,7 @@ import {
 } from 'odata-v4-typeorm-improved';
 ```
 
-Стабильная часть контракта — первые шесть. Остальное экспортируется как побочный эффект
+Стабильная часть контракта — первые семь. Остальное экспортируется как побочный эффект
 реэкспорта барреля; рассчитывать на неизменность между минорными версиями не стоит.
 
 ---
@@ -70,6 +71,7 @@ const total = Array.isArray(result) ? result.length : result.count;
 | Ошибка | Причина |
 |---|---|
 | `Error: Fail at <n>` | Синтаксически некорректный OData-параметр |
+| `ODataUnsupportedError` | Конструкция за пределами поддерживаемого подмножества (`in`, `any`/`all`, `replace`, геофункции). Клиентская ошибка — отдавайте `400` |
 | `EntityMetadataNotFoundError` | `alias` не совпадает с именем сущности/таблицы |
 | `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются |
 
@@ -243,7 +245,7 @@ interface QueryParams {
 
 ```ts
 type ParsedQueryParams = Pick<QueryParams, '$search' | '$filter' | '$orderby' | '$select' | '$expand'> & {
-  $top: number;
+  $top?: number;   // undefined = «$top не передан»; 0 = «пустая страница»
   $skip: number;
   $count: boolean;
 };
@@ -256,6 +258,36 @@ interface ExecuteQueryOptions {
   alias?: string;
 }
 ```
+
+### `ODataUnsupportedError`
+
+Бросается, когда запрос содержит конструкцию, которую библиотека не умеет транслировать
+в SQL. Ошибка **клиентская** — на уровне HTTP ей соответствует `400`.
+
+```ts
+class ODataUnsupportedError extends Error {
+  readonly feature: string;    // 'AnyExpression', 'geo.distance()', 'lambda operators (any/all)'
+  readonly fragment?: string;  // исходный фрагмент запроса
+}
+```
+
+```ts
+import { ODataUnsupportedError } from 'odata-v4-typeorm-improved';
+
+try {
+  await executeQuery(repo, req.query, { alias: 'User' });
+} catch (e) {
+  if (e instanceof ODataUnsupportedError) {
+    return res.status(400).json({ message: e.message, feature: e.feature });
+  }
+
+  throw e;
+}
+```
+
+Существование этой ошибки — следствие правила «молча ничего не терять»: раньше
+неподдержанный узел AST просто пропускался, из-за чего `$filter=not (…)` возвращал
+всю таблицу вместо подмножества.
 
 ### `GetManyResponse<T>`
 
@@ -270,10 +302,26 @@ interface GetManyResponse<T extends ObjectLiteral> {
 
 ```ts
 interface SqlOptions extends BaseSqlOptions {
-  alias: string;          // префикс колонок и ключ поиска метаданных
-  useParameters?: boolean; // по умолчанию true — литералы идут в parameters, а не в SQL
-  type?: SQLLang;          // перезаписывается принудительно, передавать бессмысленно
+  alias: string;            // префикс колонок и ключ поиска метаданных
+  dialect?: SqlDialect | string; // целевая СУБД; определяет выбор SQL-функций
+  useParameters?: boolean;  // по умолчанию true — литералы идут в parameters, а не в SQL
+  type?: SQLLang;           // перезаписывается принудительно, передавать бессмысленно
 }
+
+type SqlDialect = 'postgres' | 'mysql' | 'sqlite' | 'mssql' | 'oracle' | 'ansi';
+```
+
+`dialect` принимает и «сырой» `type` из настроек TypeORM (`'better-sqlite3'`, `'mariadb'`,
+`'aurora-postgres'`) — незнакомое значение сводится к `'ansi'`. `executeQuery` подставляет
+его из подключения автоматически; задавать вручную нужно только при прямом вызове
+`createQuery` / `createFilter`:
+
+```ts
+createQuery('$filter=year(createdAt) eq 2023', { alias: 'u', dialect: 'sqlite' });
+// where: "CAST(strftime('%Y', u.createdAt) AS INTEGER) = :p0"
+
+createQuery('$filter=year(createdAt) eq 2023', { alias: 'u', dialect: 'postgres' });
+// where: "EXTRACT(YEAR FROM u.createdAt) = :p0"
 ```
 
 ---
@@ -284,12 +332,18 @@ interface SqlOptions extends BaseSqlOptions {
 
 ### `parseQueryParams(query): ParsedQueryParams`
 
-Нормализация. `$top` / `$skip` → целое (нечисловое → `0`), `$count` → boolean
-(**по умолчанию `true`**), пустой `$search` → `undefined`. Входной объект не мутируется.
+Нормализация. `$skip` → целое, `$count` → boolean (**по умолчанию `true`**),
+пустой `$search` → `undefined`. Входной объект не мутируется.
+
+`$top` различает «не передан» (`undefined`) и «передан ноль» (`0`): по OData v4
+(раздел 11.2.6.4) `$top=0` — корректный запрос пустой страницы, а не синоним отсутствия лимита.
 
 ```ts
 parseQueryParams({ $top: '10', $skip: ' 5 ', $search: '  ' });
 // → { $top: 10, $skip: 5, $search: undefined, $count: true }
+
+parseQueryParams({});          // → { $top: undefined, $skip: 0, $count: true }
+parseQueryParams({ $top: '0' }); // → { $top: 0, ... } — вернётся пустая страница
 ```
 
 ### `queryToOdataString(query): string`
