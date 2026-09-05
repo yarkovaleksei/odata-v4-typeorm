@@ -251,7 +251,8 @@ mapToObject(compiled.parameters);  // { p0: 42 }
 connection.query(`SELECT * FROM users WHERE ${compiled.where}`, [42]);
 ```
 
-Полный пример с `pg` и `odata-v4-server`: [src/example/sql.ts](./src/example/sql.ts).
+Библиотека отдаёт **именованные** плейсхолдеры (`:p0`), а `pg` ждёт **позиционные** (`$1`) —
+переходник и полный пример с `from()`: [docs/recipes.md](./docs/recipes.md#без-typeorm-только-компиляция-в-sql).
 
 ## Примеры OData-запросов
 
@@ -448,19 +449,43 @@ GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
 ```bash
 git clone https://github.com/yarkovaleksei/odata-v4-typeorm-improved.git
 cd odata-v4-typeorm-improved
+```
+
+Дальше — на выбор. **В Docker** окружение одинаково у всех: версия Node, системные
+библиотеки для нативных модулей и версии СУБД зафиксированы в образе. Нужен только Docker
+с плагином Compose:
+
+```bash
+yarn docker:test        # lint + тесты + сборка
+yarn docker:test:all    # матрица OData на SQLite, PostgreSQL и MySQL
+yarn docker:down        # погасить всё
+```
+
+Зависимости ставятся при старте контейнера, а не при сборке образа — пересобирать его
+после правки `package.json` не нужно.
+
+**Локально** цикл правка-проверка быстрее:
+
+```bash
 yarn install
+yarn verify                  # lint + тесты + сборка
+yarn db:up && yarn test:all  # матрица на трёх СУБД, базы из compose
 ```
 
 ### Команды
 
 | Команда | Что делает |
 |---|---|
+| `yarn verify` | lint + тесты + сборка — то же, что делает CI |
 | `yarn test:unit` | Прогон тестов Jest на SQLite в памяти |
-| `yarn db:up` / `yarn db:down` | Поднять/погасить PostgreSQL и MySQL в контейнерах |
 | `yarn test:all` | Тот же набор тестов на всех трёх СУБД |
-| `yarn lint` | ESLint по всем `.ts` / `.tsx` |
-| `yarn lint:fix` | То же с автоисправлением |
+| `yarn db:up` | Поднять PostgreSQL и MySQL для прогона с хоста |
+| `yarn lint` / `yarn lint:fix` | ESLint, с автоисправлением и без |
 | `yarn build` | Чистая пересборка в `build/` |
+| `yarn docker:test` | `yarn verify` внутри контейнера |
+| `yarn docker:test:all` | Матрица на трёх СУБД внутри контейнера |
+| `yarn docker:sh` | Оболочка внутри контейнера |
+| `yarn docker:down` | Погасить контейнеры и удалить тома |
 | `yarn server` | Демо-сервер из `examples/server` с автоперезапуском |
 | `yarn release` | `build` + `npm publish` |
 | `yarn release:beta` | `build` + `npm publish --tag beta` |
@@ -468,7 +493,7 @@ yarn install
 Перед коммитом — та же цепочка, что гоняет CI на Node 20/22/24:
 
 ```bash
-yarn lint && yarn test:unit && yarn build
+yarn verify          # либо yarn docker:test
 ```
 
 ### Полезные вызовы

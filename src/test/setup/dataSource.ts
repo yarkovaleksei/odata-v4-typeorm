@@ -29,11 +29,39 @@ export { testDatabase, type TestDatabase } from './testDatabase';
 /** Сущности тестового набора; порядок важен только для читаемости. */
 const entities = [User, Post, Author, Book, Review];
 
+/** Адрес базы по умолчанию для каждой внешней СУБД: порты проброса из `compose.yaml`. */
+const DEFAULT_ENDPOINTS = {
+  postgres: { host: '127.0.0.1', port: 55432 },
+  mysql: { host: '127.0.0.1', port: 53306 },
+} as const;
+
+/**
+ * Адрес и учётные данные внешней СУБД.
+ *
+ * Три уровня приоритета, от высшего к низшему:
+ *
+ * 1. `TEST_DB_HOST` / `TEST_DB_PORT` — разовое переопределение для конкретного прогона;
+ * 2. `TEST_POSTGRES_HOST` / `TEST_MYSQL_PORT` и т.п. — адреса обеих баз сразу. Нужны,
+ *    когда одна команда прогоняет матрицу на нескольких СУБД (`yarn test:all`): единой
+ *    пары «хост-порт» там не существует, а внутри сети compose адреса отличаются
+ *    от проброшенных на хост;
+ * 3. значения из {@link DEFAULT_ENDPOINTS} — работа с локально поднятым `compose.yaml`.
+ */
+function resolveConnection(database: 'postgres' | 'mysql') {
+  const prefix = database === 'postgres' ? 'TEST_POSTGRES' : 'TEST_MYSQL';
+  const defaults = DEFAULT_ENDPOINTS[database];
+
+  return {
+    host: process.env.TEST_DB_HOST ?? process.env[`${prefix}_HOST`] ?? defaults.host,
+    port: Number(process.env.TEST_DB_PORT ?? process.env[`${prefix}_PORT`] ?? defaults.port),
+    username: process.env.TEST_DB_USER ?? 'odata',
+    password: process.env.TEST_DB_PASSWORD ?? 'odata',
+    database: process.env.TEST_DB_NAME ?? 'odata_test',
+  };
+}
+
 /**
  * Параметры подключения под выбранную СУБД.
- *
- * Хосты и порты совпадают с `compose.yaml`; они переопределяются переменными окружения,
- * чтобы тот же прогон работал и в CI, где база поднимается сервисом workflow.
  *
  * Экспортируется, потому что этими же параметрами пользуется `globalSetup.ts`:
  * он создаёт схему до старта воркеров, отдельным подключением.
@@ -49,26 +77,10 @@ export function buildDataSourceOptions(): DataSourceOptions {
 
   switch (testDatabase) {
     case 'postgres':
-      return {
-        ...shared,
-        type: 'postgres',
-        host: process.env.TEST_DB_HOST ?? '127.0.0.1',
-        port: Number(process.env.TEST_DB_PORT ?? 55432),
-        username: process.env.TEST_DB_USER ?? 'odata',
-        password: process.env.TEST_DB_PASSWORD ?? 'odata',
-        database: process.env.TEST_DB_NAME ?? 'odata_test',
-      };
+      return { ...shared, type: 'postgres', ...resolveConnection('postgres') };
 
     case 'mysql':
-      return {
-        ...shared,
-        type: 'mysql',
-        host: process.env.TEST_DB_HOST ?? '127.0.0.1',
-        port: Number(process.env.TEST_DB_PORT ?? 53306),
-        username: process.env.TEST_DB_USER ?? 'odata',
-        password: process.env.TEST_DB_PASSWORD ?? 'odata',
-        database: process.env.TEST_DB_NAME ?? 'odata_test',
-      };
+      return { ...shared, type: 'mysql', ...resolveConnection('mysql') };
 
     default:
       return { ...shared, type: 'sqlite', database: ':memory:' };

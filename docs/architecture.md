@@ -20,7 +20,7 @@
 ```
 
 Уровень 3 не зависит от TypeORM по сути (только тип `ObjectLiteral` в сигнатурах) и годится
-для «сырых» драйверов — так устроен `src/example/sql.ts` с `pg`.
+для «сырых» драйверов; рецепт с `pg` — в [recipes.md](./recipes.md#без-typeorm-только-компиляция-в-sql).
 
 ## Конвейер выполнения
 
@@ -57,7 +57,11 @@ req.query  { $filter: "name eq 'Ann'", $top: '10', $search: 'x' }
 │   processSearch(...)           ← $search → LIKE ... OR ...   │
 │   .skip(...) .take(...)        ← $skip / $top                │
 │   getMany() | getManyAndCount()                              │
-└──────────────────────────────────────────────────────────────┘
+└──────────┬───────────────────────────────────────────────────┘
+           ▼
+┌──────────────────────┐
+│ applyNestedPagination│  срез вложенных $top / $skip по дереву сущностей
+└──────────────────────┘
 ```
 
 ### Почему объект → строка → AST
@@ -99,8 +103,10 @@ req.query  { $filter: "name eq 'Ann'", $top: '10', $search: 'x' }
 в `context.literal`, а `VisitEqualsExpression` переписывает готовый хвост строки `where`
 регулярным выражением.
 
-**5. Строковые функции OData.** `contains` / `startswith` / `endswith` → `LIKE` с шаблоном
-в параметрах; остальные — прямая трансляция в SQL-функции.
+**5. Функции OData и диалекты.** `contains` / `startswith` / `endswith` → `LIKE` с шаблоном
+в параметрах; остальные транслируются в SQL-функции, причём форма выбирается по диалекту
+подключения (`LENGTH` против `LEN`, `EXTRACT` против `strftime`). Узел AST без обработчика
+даёт `ODataUnsupportedError`, а не тихий пропуск.
 
 ### Плейсхолдеры: почему `SQLLang.Oracle`
 
@@ -113,9 +119,10 @@ TypeORM умеет только именованные.
 `createQuery` и `createFilter` вызывают его сами; при ручном использовании `TypeOrmVisitor`
 вызывать обязательно.
 
-Здесь же живёт дефект A-01: `VisitLiteral` в этом классе пишет `:pN` напрямую, а LIKE-ветки —
-`?`, и `asOracleSql()` нумерует найденные `?` заново с начала карты параметров. Подробности
-и воспроизведение — в [audit.md](./audit.md).
+Здесь когда-то жил дефект A-01: `VisitLiteral` писал `:pN` напрямую, а LIKE-ветки — `?`,
+и `asOracleSql()` перенумеровывал найденные `?` заново с начала карты параметров, отчего
+`name eq 'x' and contains(title,'y')` молча возвращал не те строки. Теперь имя пишется
+сразу везде, и `asOracleSql()` нечего переписывать. Разбор — в [audit.md](./audit.md).
 
 ### Значения по умолчанию
 
@@ -137,7 +144,7 @@ TypeORM умеет только именованные.
 | `item.select` | Что это значит | Действие |
 |---|---|---|
 | `'*'` | `$expand=posts` без вложенного `$select` | `leftJoinAndSelect` — TypeORM добавит все колонки |
-| `'posts8.id, posts8.title'` | `$expand=posts($select=id,title)` | `leftJoin` + `addSelect` перечисленных колонок |
+| `'Author_books.id, Author_books.title'` | `$expand=books($select=id,title)` | `leftJoin` + `addSelect` перечисленных колонок |
 | `''` | «виртуальный» include из фильтра по пути | `leftJoin` + пустой `addSelect` — JOIN без выборки |
 
 JOIN всегда LEFT: `$expand` не должен отсеивать сущности без связанных записей, иначе он
@@ -146,13 +153,21 @@ JOIN всегда LEFT: `$expand` не должен отсеивать сущн�
 Вложенные `$expand` обрабатываются рекурсией: по `propertyPath` в метаданных родителя ищется
 связь, из неё берётся целевая сущность и её метаданные, и функция вызывается для следующего уровня.
 
+Алиасы JOIN строятся по пути связи: `Author` → `Author_books` → `Author_books_reviews`.
+Схема детерминированная, поэтому `$expand` и `$filter` по одной и той же связи приходят
+к одному имени и к одному JOIN.
+
+Вложенные `$top` / `$skip` в SQL не попадают: `LIMIT` в запросе с `LEFT JOIN` действует
+на весь плоский результат, а не на группу. Срез делает `applyNestedPagination` уже
+над деревом сущностей.
+
 ## Отношение к вышестоящим библиотекам
 
 ```
 odata-v4-typeorm-improved
 ├── odata-v4-parser   0.1.29   строка OData → AST
 ├── odata-v4-sql      0.1.2    базовый Visitor: AST → фрагменты SQL
-└── odata-v4-literal  0.1.1    разбор литералов (не объявлен в package.json — дефект A-09)
+└── odata-v4-literal  0.1.1    разбор литералов
 ```
 
 Все три не поддерживаются с 2016–2018 годов. Практические следствия описаны в
@@ -176,5 +191,4 @@ odata-v4-typeorm-improved
 | [src/lib/executeQuery/mapToObject/](../src/lib/executeQuery/mapToObject/) | `Map` параметров → объект |
 | [src/lib/ODataQueryMiddleware/](../src/lib/ODataQueryMiddleware/) | Обработчик Express |
 | [src/test/](../src/test/) | Сущности и обвязка для интеграционных тестов |
-| [src/example/sql.ts](../src/example/sql.ts) | Пример без TypeORM: `createQuery` + драйвер `pg` |
 | [examples/server/](../examples/server/) | Демо-сервер на Express |

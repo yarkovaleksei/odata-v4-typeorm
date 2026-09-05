@@ -301,29 +301,95 @@ export class UsersController {
 
 ## Без TypeORM: только компиляция в SQL
 
-`createFilter` возвращает фрагмент `WHERE` и параметры — подставьте их в собственный запрос.
+`createQuery` и `createFilter` к базе не обращаются — они возвращают фрагменты SQL и карту
+параметров. Этого достаточно, чтобы собрать запрос для любого драйвера.
+
+### Плейсхолдеры: `:pN` → `$n`
+
+Единственное, что придётся написать самому. Библиотека генерирует **именованные**
+плейсхолдеры `:p0`, `:p1` — их понимает TypeORM. Драйверы вроде `pg` работают
+с **позиционными** `$1`, `$2`, поэтому перед выполнением нужен переходник:
 
 ```ts
-import { createFilter, mapToObject } from 'odata-v4-typeorm-improved';
+/**
+ * Переводит именованные плейсхолдеры в позиционные и раскладывает значения по порядку.
+ *
+ * Шаблон намеренно узкий (`:p<цифры>`): он совпадает только с тем, что порождает сама
+ * библиотека, и не заденет ни приведение типов `::text`, ни двоеточия внутри
+ * строковых литералов.
+ */
+function toPositionalQuery(sql: string, parameters: Map<string, unknown>) {
+  const values: unknown[] = [];
+
+  const text = sql.replace(/:(p\d+)\b/g, (_match, name: string) => {
+    values.push(parameters.get(name));
+
+    return `$${values.length}`;
+  });
+
+  return { text, values };
+}
+```
+
+Для `mysql2` то же самое, только вместо `$${values.length}` подставляется `?`.
+
+### Полный запрос через `from()`
+
+`from(table)` собирает готовый `SELECT` со всеми фрагментами: списком полей, `WHERE`,
+`ORDER BY` и пагинацией.
+
+```ts
+import { createQuery } from 'odata-v4-typeorm-improved';
 import { Pool } from 'pg';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-app.get('/api/users', async (req, res) => {
-  // GET /api/users?$filter=Id eq 42
-  const compiled = createFilter(req.query.$filter as string, { alias: '' });
+async function selectCountries(odataQuery: string) {
+  const compiled = createQuery(odataQuery, { alias: '', dialect: 'postgres' });
+  const { text, values } = toPositionalQuery(compiled.from('country'), compiled.parameters);
 
-  const params = mapToObject(compiled.parameters);
+  const result = await pool.query(text, values);
 
-  // compiled.where: "Id = :p0", params: { p0: 42 }
-  // pg использует позиционные $1 — при желании перепишите плейсхолдеры
-  const result = await pool.query(`SELECT * FROM users WHERE ${compiled.where}`, [params.p0]);
+  return result.rows;
+}
 
-  res.json({ value: result.rows });
-});
+// selectCountries("$filter=continent eq 'Europe'&$orderby=name asc&$top=10");
 ```
 
-Полный пример с `odata-v4-server`: [src/example/sql.ts](../src/example/sql.ts).
+> Имя таблицы подставляется в `from()` без экранирования. Передавайте туда только
+> константу из кода, никогда не пользовательский ввод.
+
+### Только `$filter` поверх собственного условия
+
+Когда остальную часть SQL приложение строит само — например добавляет обязательное
+ограничение, которое клиент обойти не должен:
+
+```ts
+import { createFilter } from 'odata-v4-typeorm-improved';
+
+async function selectCountryByCode(code: string, odataFilter?: string) {
+  const conditions = ['code = $1'];
+  const values: unknown[] = [code];
+
+  if (odataFilter) {
+    const compiled = createFilter(odataFilter, { alias: '', dialect: 'postgres' });
+    const filter = toPositionalQuery(compiled.where, compiled.parameters);
+
+    // Смещаем нумерацию: $1 уже занят кодом страны
+    conditions.push(
+      `(${filter.text.replace(/\$(\d+)/g, (_m, n: string) => `$${Number(n) + values.length}`)})`
+    );
+    values.push(...filter.values);
+  }
+
+  const result = await pool.query(
+    `SELECT * FROM country WHERE ${conditions.join(' AND ')}`,
+    values
+  );
+
+  return result.rows[0];
+}
+```
 
 ---
 

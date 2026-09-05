@@ -204,7 +204,8 @@ compiled.parameters; // Map { 'p0' => 42 }
 connection.query(`SELECT * FROM users WHERE ${compiled.where}`, compiled.parameters);
 ```
 
-Основной сценарий — «сырой» SQL мимо TypeORM. Полный пример: [src/example/sql.ts](../src/example/sql.ts).
+Основной сценарий — «сырой» SQL мимо TypeORM. Полный пример, включая перевод именованных
+плейсхолдеров в позиционные: [recipes.md](./recipes.md#без-typeorm-только-компиляция-в-sql).
 
 ---
 

@@ -1,19 +1,85 @@
-# Базы для прогона матрицы совместимости с OData на реальных СУБД.
+# Окружение для разработки и тестирования.
 #
-#   yarn db:up                              # поднять
-#   TEST_DB=postgres yarn test:unit         # прогнать матрицу на PostgreSQL
-#   TEST_DB=mysql yarn test:unit            # то же на MySQL
-#   yarn db:down                            # погасить и удалить данные
+# Цель — одинаковое окружение у всех: версия Node, системные библиотеки для нативных
+# модулей и версии СУБД зафиксированы здесь, а не зависят от того, что установлено
+# на машине разработчика.
 #
-# Порты намеренно нестандартные (55432 / 53306), чтобы не конфликтовать с локально
-# установленными PostgreSQL и MySQL разработчика.
+#   yarn docker:test          # весь набор проверок (lint + тесты + сборка) на SQLite
+#   yarn docker:test:all      # матрица OData на SQLite, PostgreSQL и MySQL
+#   yarn docker:sh            # интерактивная оболочка внутри контейнера
+#   yarn docker:down          # погасить всё и удалить данные
 #
-# Данные держатся в tmpfs: тесты пересоздают схему на старте, сохранять между запусками
-# нечего, а в памяти это заметно быстрее.
+# Если Node установлен локально и хочется более быстрого цикла, базы можно поднять
+# отдельно и прогонять тесты с хоста: `yarn db:up && yarn test:all`.
+#
+# Зависимости ставятся при старте контейнера (см. docker/entrypoint.sh), а не при сборке
+# образа: так образ не нужно пересобирать после правки package.json. Чтобы установка
+# не занимала минуты на каждом запуске, node_modules и кэш yarn лежат в именованных томах.
 
 services:
+  # ── Прогон тестов ──────────────────────────────────────────────────────────
+  tests:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        # Версия Node фиксируется здесь. CI проверяет 20, 22 и 24;
+        # для локальной разработки берётся середина диапазона.
+        NODE_VERSION: ${NODE_VERSION:-22}
+    # uid:gid процесса внутри контейнера. По умолчанию 1000 — типичный первый пользователь
+    # в Linux. Если ваш uid другой, файлы в build/ и coverage/ окажутся чужими:
+    # запустите как `UID_GID="$(id -u):$(id -g)" docker compose ...`
+    user: ${UID_GID:-1000:1000}
+    volumes:
+      # Исходники монтируются, а не копируются: правка на хосте сразу видна внутри.
+      - .:/app
+      # node_modules И кэш yarn — в томах, а не в смонтированном каталоге.
+      #
+      # Это не оптимизация, а необходимость: sqlite3, pg и mysql2 содержат нативные
+      # бинарники, собранные под конкретную платформу. Если разработчик работает на macOS,
+      # его node_modules несовместим с linux-контейнером, и общий каталог сломал бы
+      # и то, и другое окружение.
+      - node_modules:/app/node_modules
+      - yarn_cache:/home/node/.cache/yarn
+    environment:
+      # Внутри сети compose базы доступны по именам сервисов и штатным портам —
+      # проброс на хост (55432 / 53306) здесь не участвует.
+      #
+      # Задаются адреса обеих баз сразу, а не пара TEST_DB_HOST/TEST_DB_PORT: команда
+      # `yarn test:all` прогоняет матрицу на PostgreSQL и MySQL подряд, и единого адреса
+      # для них не существует.
+      TEST_POSTGRES_HOST: postgres
+      TEST_POSTGRES_PORT: 5432
+      TEST_MYSQL_HOST: mysql
+      TEST_MYSQL_PORT: 3306
+      TEST_DB_USER: odata
+      TEST_DB_PASSWORD: odata
+      TEST_DB_NAME: odata_test
+      # Кэш yarn внутри тома; путь должен совпадать с точкой монтирования выше.
+      YARN_CACHE_FOLDER: /home/node/.cache/yarn
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+
+  # ── Базы для матрицы совместимости ─────────────────────────────────────────
+  #
+  # ВЫБОР ВЕРСИЙ. Берётся актуальный стабильный PostgreSQL и LTS-выпуск MySQL:
+  # библиотека проверяется на том, что чаще всего стоит в продакшене. MySQL 9.x —
+  # innovation-ветка с коротким сроком поддержки, для этой цели она хуже 8.4 LTS.
+  #
+  # Теги фиксируют только мажорную версию: патчи подтягиваются сами, а несовместимость
+  # между мажорными — как раз то, что тесты и должны ловить.
+  #
+  # Порты на хост пробрасываются нестандартные (55432 / 53306), чтобы не конфликтовать
+  # с локально установленными PostgreSQL и MySQL. Изнутри сети compose используются
+  # обычные 5432 и 3306.
+  #
+  # Данные держатся в tmpfs: тесты пересоздают схему на старте, сохранять между
+  # запусками нечего, а в памяти это заметно быстрее.
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: odata
       POSTGRES_PASSWORD: odata
@@ -21,7 +87,10 @@ services:
     ports:
       - '55432:5432'
     tmpfs:
-      - /var/lib/postgresql/data
+      # В PostgreSQL 18 сменилась раскладка: данные лежат в подкаталоге, а монтировать
+      # нужно сам /var/lib/postgresql. Прежний путь /var/lib/postgresql/data образ
+      # считает «неиспользуемым томом» и отказывается стартовать.
+      - /var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U odata -d odata_test']
       interval: 2s
@@ -29,7 +98,7 @@ services:
       retries: 20
 
   mysql:
-    image: mysql:8
+    image: mysql:8.4
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_USER: odata
@@ -44,3 +113,7 @@ services:
       interval: 3s
       timeout: 3s
       retries: 30
+
+volumes:
+  node_modules:
+  yarn_cache:

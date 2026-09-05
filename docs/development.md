@@ -4,6 +4,36 @@
 
 ## Требования
 
+Есть два способа работать с проектом. Оба поддерживаются, выбирайте по вкусу.
+
+### В Docker — окружение одинаково у всех
+
+Нужен только Docker с плагином Compose. Версия Node, системные библиотеки для нативных
+модулей и версии СУБД зафиксированы в образе и `compose.yaml`, поэтому результат не зависит
+от того, что установлено на машине.
+
+```bash
+git clone https://github.com/yarkovaleksei/odata-v4-typeorm-improved.git
+cd odata-v4-typeorm-improved
+
+yarn docker:test        # lint + тесты + сборка на SQLite
+yarn docker:test:all    # матрица OData на SQLite, PostgreSQL и MySQL
+yarn docker:down        # погасить всё и удалить данные
+```
+
+Зависимости ставятся **при старте контейнера**, а не при сборке образа: образ не нужно
+пересобирать после правки `package.json`, и разработчик всегда получает состояние,
+соответствующее текущему `yarn.lock`. Чтобы это не занимало минуты на каждом запуске,
+`node_modules` и кэш yarn лежат в именованных томах — повторный запуск занимает секунды.
+
+Пересобирать образ нужно, только если изменился сам `docker/Dockerfile`:
+
+```bash
+yarn docker:build
+```
+
+### Локально — быстрее цикл правка-проверка
+
 | Инструмент | Версия | Примечание |
 |---|---|---|
 | Node.js | 20, 22 или 24 | CI прогоняет все три |
@@ -11,9 +41,9 @@
 | TypeScript | 6.x | Из devDependencies, глобально ставить не нужно |
 
 ```bash
-git clone https://github.com/yarkovaleksei/odata-v4-typeorm-improved.git
-cd odata-v4-typeorm-improved
 yarn install
+yarn verify                 # lint + тесты + сборка
+yarn db:up && yarn test:all  # матрица на трёх СУБД, базы из compose
 ```
 
 ---
@@ -25,15 +55,26 @@ yarn install
 | Команда | Что делает |
 |---|---|
 | `yarn test:unit` | Прогон всех тестов Jest на SQLite в памяти |
-| `yarn db:up` | Поднять PostgreSQL и MySQL в контейнерах (`compose.yaml`) |
 | `yarn test:postgres` | Тот же набор тестов на PostgreSQL |
 | `yarn test:mysql` | Тот же набор на MySQL |
 | `yarn test:all` | Последовательно на всех трёх СУБД |
-| `yarn db:down` | Погасить контейнеры и удалить данные |
+| `yarn verify` | lint + тесты + сборка — то же, что делает CI |
 | `yarn lint` | ESLint по всем `.ts` / `.tsx` |
 | `yarn lint:fix` | То же с автоисправлением |
 | `yarn build` | Чистая пересборка в `build/` (`rm -rf ./build && tsc -p tsconfig.build.json`) |
+| `yarn db:up` | Поднять PostgreSQL и MySQL для прогона с хоста |
 | `yarn server` | Поднять демо-сервер из `examples/server` с автоперезапуском |
+
+### Docker
+
+| Команда | Что делает |
+|---|---|
+| `yarn docker:test` | `yarn verify` внутри контейнера |
+| `yarn docker:test:all` | Матрица на всех трёх СУБД внутри контейнера |
+| `yarn docker:lint` | Только ESLint |
+| `yarn docker:sh` | Интерактивная оболочка внутри контейнера |
+| `yarn docker:build` | Пересобрать образ (нужно только при правке `docker/Dockerfile`) |
+| `yarn docker:down` | Погасить контейнеры и удалить тома |
 
 ### Публикация
 
@@ -121,16 +162,23 @@ console.log('includes:', q.includes.map(i => ({ nav: i.navigationProperty, alias
 ### Что запустить перед коммитом
 
 ```bash
-yarn lint && yarn test:unit && yarn build
+yarn verify          # локально
+yarn docker:test     # либо то же самое в контейнере
 ```
 
-Ровно эту цепочку выполняет CI ([`ci.yaml`](../.github/workflows/ci.yaml)) на Node 20/22/24.
+Ровно эту цепочку выполняет CI ([`ci.yaml`](../.github/workflows/ci.yaml)) на Node 20/22/24,
+плюс отдельная джоба прогоняет матрицу на PostgreSQL и MySQL.
 
 ---
 
 ## Структура проекта
 
 ```
+docker/
+├── Dockerfile               образ для прогона тестов; зависимости ставит entrypoint
+└── entrypoint.sh            yarn install, затем переданная команда
+compose.yaml                 сервис tests + PostgreSQL + MySQL
+
 src/
 ├── lib/                     ← публикуемый код
 │   ├── index.ts             публичный API
@@ -147,11 +195,10 @@ src/
 │       ├── processIncludes/            includes → LEFT JOIN
 │       ├── processSearch/              $search → LIKE / равенство
 │       └── mapToObject/                Map → объект
-├── test/                    ← обвязка тестов (в пакет не идёт)
-│   ├── entity/              User/Post — базовые; Author/Book/Review — для матрицы
-│   ├── matrix/              матрица совместимости с OData
-│   └── setup/               DataSource на SQLite + seed.sql
-└── example/                 ← пример без TypeORM (в пакет не идёт)
+└── test/                    ← обвязка тестов (в пакет не идёт)
+    ├── entity/              User/Post — базовые; Author/Book/Review — для матрицы
+    ├── matrix/              матрица совместимости с OData
+    └── setup/               DataSource, сиды, выбор СУБД
 
 examples/server/             ← демо-сервер на Express
 docs/                        ← эта документация
@@ -177,10 +224,19 @@ docs/                        ← эта документация
 СУБД выбирается переменной `TEST_DB`; по умолчанию SQLite в памяти.
 
 ```bash
+# в контейнере — окружение одинаково у всех
+yarn docker:test:all
+
+# либо с хоста, если Node установлен локально
 yarn db:up                 # PostgreSQL на 55432, MySQL на 53306
-yarn test:all              # тот же набор тестов на всех трёх
-yarn db:down
+yarn test:all
+yarn docker:down
 ```
+
+Внутри сети compose базы доступны по именам сервисов (`postgres:5432`, `mysql:3306`);
+на хост они проброшены на нестандартные порты, чтобы не конфликтовать с локально
+установленными СУБД. Адреса задаются переменными `TEST_POSTGRES_HOST` / `TEST_MYSQL_PORT`
+и т.п. — обе пары сразу, потому что `yarn test:all` ходит в обе базы за один запуск.
 
 Зачем это нужно: трансляция функций OData зависит от диалекта, и одного SQLite мало —
 сгенерированная строка SQL может выглядеть правильно и при этом не выполниться. Первый же
