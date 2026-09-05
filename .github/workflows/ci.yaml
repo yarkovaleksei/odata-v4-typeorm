@@ -39,6 +39,11 @@ jobs:
       - name: Run build library
         run: yarn build
 
+      # Демо-сервер годами оставался сломанным именно потому, что его никто не собирал.
+      # Проверка типов дешёвая и не даёт ему разойтись с библиотекой снова.
+      - name: Typecheck example server
+        run: yarn server:typecheck
+
       # Раньше exclude в tsconfig.build.json использовал шаблон `*.(test|spec).ts`,
       # который TypeScript не понимает (групп с альтернативой в его glob нет),
       # и скомпилированные тесты молча уезжали в npm-пакет. Проверка сторожит регрессию.

@@ -36,7 +36,7 @@ describe('createFilter', () => {
       const compiled = createFilter("author/name eq 'Ann'", { alias: '' });
 
       expect(compiled.where).toBe('author.name = :p0');
-      expect(compiled.includes[0].alias).toBe('author');
+      expect(compiled.includes[0]!.alias).toBe('author');
     });
 
     it('логическое выражение со скобками', () => {
@@ -92,10 +92,10 @@ describe('createFilter', () => {
 
       expect(compiled.where).toBe('book_author.name = :p0');
       expect(compiled.includes).toHaveLength(1);
-      expect(compiled.includes[0].navigationProperty).toBe('author');
-      expect(compiled.includes[0].alias).toBe('book_author');
+      expect(compiled.includes[0]!.navigationProperty).toBe('author');
+      expect(compiled.includes[0]!.alias).toBe('book_author');
       // Связь нужна только для условия — колонки в выборку не идут.
-      expect(compiled.includes[0].select).toBe('');
+      expect(compiled.includes[0]!.select).toBe('');
     });
   });
 

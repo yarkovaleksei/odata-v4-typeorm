@@ -63,17 +63,25 @@ describe('ODataQueryMiddleware', () => {
       const { state, next } = await run({ $filter: "name eq 'Ada'" });
 
       expect(state.status).toBe(200);
+      // Без $count ответ — массив: middleware отдаёт результат executeQuery как есть.
+      expect(state.body).toEqual([expect.objectContaining({ id: 1, name: 'Ada' })]);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('отвечает объектом { items, count } при $count=true', async () => {
+      const { state } = await run({ $filter: "name eq 'Ada'", $count: 'true' });
+
+      expect(state.status).toBe(200);
       expect(state.body).toEqual({
         items: [expect.objectContaining({ id: 1, name: 'Ada' })],
         count: 1,
       });
-      expect(next).not.toHaveBeenCalled();
     });
 
     it('пробрасывает опции выполнения', async () => {
       const { state } = await run({ $top: '100' }, { maxTop: 2 });
 
-      expect((state.body as { items: unknown[] }).items).toHaveLength(2);
+      expect(state.body as unknown[]).toHaveLength(2);
     });
   });
 

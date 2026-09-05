@@ -277,7 +277,7 @@ executeQuery(repo, req.query, {
 
 **Оценка: 5–10 д. Риск: высокий.**
 
-### ⬜ R-19 · Включить `strict` в TypeScript (Н-05)
+### ✅ R-19 · Включить `strict` в TypeScript (Н-05)
 
 `strict: true`, `noUnusedLocals`, `noImplicitOverride`; убрать 8 `@ts-ignore`
 (большинство — из-за динамического `this[context.target]`, лечится типом
@@ -299,7 +299,7 @@ executeQuery(repo, req.query, {
 |---|---|---|
 | ✅ R-21 | Удалить мёртвый код: блок `$top` в `parseQueryParams` (Н-02), условие `Object.keys(...).length === 0` (Н-03) | 0.25 д |
 | ⬜ R-22 | Установить `prettier`, добавить скрипты `format` / `format:check`, проверять формат в CI (Н-06) | 0.25 д |
-| ⬜ R-23 | Обновить `examples/server` на `DataSource` вместо `getConnection` / `getRepository` (Н-09) | 1 д |
+| ✅ R-23 | `examples/server` переписан на `DataSource`; добавлен интерактивный конструктор запросов, коллекция Postman расширена до 40 запросов, типы проверяются в CI | 1 д |
 | ⬜ R-24 | `CHANGELOG.md` (Keep a Changelog), `CONTRIBUTING.md`, шаблоны issue/PR | 0.5 д |
 | ⬜ R-25 | Подключить Dependabot или Renovate | 0.25 д |
 | ✅ R-26 | Упростить `getIdentifier`: ретроактивный `replace` с неэкранированным `context.identifier` в `RegExp` (в шаблоне `.` трактуется как любой символ) | 1 д |
@@ -309,6 +309,7 @@ executeQuery(repo, req.query, {
 | ✅ R-32 | Учитывать `column.isSelect === false`. Оказалось шире `TODO`: утечка шла на каждом запросе, а не только через вложенный `$select` — см. A-12 | 0.5 д |
 | ✅ R-29 | Убрать дублирование разделителя в `VisitSelectItem` (два разных места добавляют `', '` и `','`) | 0.25 д |
 | ⬜ R-30 | `docs/` в CI: проверка ссылок и примеров кода | 0.5 д |
+| ✅ R-33 | `$count` по умолчанию — `false`, как в OData v4 (Н-01). Ломающее: форма ответа по умолчанию стала массивом, `{ items, count }` возвращается только на явный `$count=true` | 0.5 д |
 
 ---
 
@@ -342,15 +343,15 @@ executeQuery(repo, req.query, {
 | A-09 Необъявленная зависимость | R-05 | 2 | ✅ |
 | A-10 Устаревшие зависимости | R-18 | 5 | ⬜ |
 | A-11 `not` отбрасывается | R-01 | 1 | ✅ |
-| Н-01 `$count` по умолчанию | документировано, менять не планируется | — | — |
+| Н-01 `$count` по умолчанию | R-33 | 7 | ✅ Умолчание приведено к спецификации (`false`); ломающее изменение для 2.0.0 |
 | Н-02, Н-03 Мёртвый код | R-21 | 6 | ✅ |
 | Н-04 Валидация `$top` | R-10 | 3 | ✅ |
-| Н-05 `strict` | R-19 | 5 | ⚠️ `@ts-ignore` в посетителе убраны, `strict` — нет |
+| Н-05 `strict` | R-19 | 5 | ✅ `strict` плюс `noUncheckedIndexedAccess`, `noImplicitOverride`, `noUnusedLocals`, `noUnusedParameters` |
 | Н-06 Prettier | R-22 | 6 | ⬜ |
-| Н-07 Покрытие тестами | R-00.1…R-00.4 | 0 | ⚠️ 97.7% строк; нет порога в CI и прогона на других СУБД |
+| Н-07 Покрытие тестами | R-00.1…R-00.4 | 0 | ⚠️ 347 тестов на SQLite, PostgreSQL и MySQL; по `src/lib` — 96–100% строк на каталог. Осталось: порог покрытия в CI |
 | Н-08 `.npmrc` | R-07 | 2 | ✅ |
 | Н-11 Мёртвая обвязка примера | — | — | ✅ Удалены `config/default.json` и `world.sql` (194 КБ) вместе с тремя devDependencies |
-| Н-09 Пример на API 0.2 | R-23 | 6 | ⬜ |
+| Н-09 Пример на API 0.2 | R-23 | 6 | ✅ |
 | Н-10 Поля `package.json` | R-06 | 2 | ✅ |
 
 ---

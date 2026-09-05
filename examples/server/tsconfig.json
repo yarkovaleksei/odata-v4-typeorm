@@ -1,21 +1,27 @@
 {
   "compilerOptions": {
-    "emitDecoratorMetadata": true,
-    "experimentalDecorators": true,
-    "strictPropertyInitialization": false,
-    "module": "commonjs",
+    "target": "es2022",
+    "module": "node16",
+    "moduleResolution": "node16",
     "esModuleInterop": true,
-    "target": "es6",
     "resolveJsonModule": true,
-    "noImplicitAny": false,
-    "moduleResolution": "node",
-    "sourceMap": true,
-    "outDir": "dist",
-    "baseUrl": ".",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "strictPropertyInitialization": false,
+    "strict": true,
+    "skipLibCheck": true,
+
+    // Демо запускается из исходников через ts-node (`yarn serve`), собранные файлы
+    // не нужны. Без outDir и rootDir отпадает и конфликт «файл вне rootDir»,
+    // который возникал из-за импорта библиотеки соседним путём.
+    "noEmit": true,
+
+    // Библиотека подключается под своим настоящим именем — так же, как её подключит
+    // пользователь. Отображение ведёт в исходники, чтобы правка в src/lib была видна
+    // в демо сразу, без сборки и без npm link.
     "paths": {
-      "*": ["node_modules/*", "src/types/*"]
-    },
-    "skipLibCheck": true
+      "odata-v4-typeorm-improved": ["../../src/lib"]
+    }
   },
   "include": ["src/**/*"]
 }

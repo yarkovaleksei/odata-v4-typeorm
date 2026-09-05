@@ -11,10 +11,13 @@ import type { ParsedQueryParams, QueryParams } from '../../types';
  * Остальное `encodeURI` либо кодирует сам, либо парсер переваривает: проверено, что
  * `&`, `+`, `=`, `%` и пробел внутри литерала работают без экранирования.
  */
-const RESERVED_OUTSIDE_ODATA_GRAMMAR: Readonly<Record<string, string>> = {
+const RESERVED_OUTSIDE_ODATA_GRAMMAR = {
   '#': '%23',
   '?': '%3F',
-};
+} as const;
+
+/** Символы из {@link RESERVED_OUTSIDE_ODATA_GRAMMAR}; тип выводится из самой таблицы. */
+type ReservedCharacter = keyof typeof RESERVED_OUTSIDE_ODATA_GRAMMAR;
 
 /**
  * Кодирует значение параметра так, чтобы его пережил парсер OData.
@@ -27,7 +30,7 @@ const RESERVED_OUTSIDE_ODATA_GRAMMAR: Readonly<Record<string, string>> = {
 function encodeValue(value: unknown): string {
   return encodeURI(String(value)).replace(
     /[#?]/g,
-    (character) => RESERVED_OUTSIDE_ODATA_GRAMMAR[character]
+    (character) => RESERVED_OUTSIDE_ODATA_GRAMMAR[character as ReservedCharacter]
   );
 }
 

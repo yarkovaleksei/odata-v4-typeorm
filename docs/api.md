@@ -45,8 +45,8 @@ function executeQuery<T extends ObjectLiteral = ObjectLiteral>(
 | `options.allowedFields` | Белый список полей для `$select` / `$filter` / `$orderby`. Полные пути от корня |
 | `options.allowedExpands` | Белый список связей для `$expand` и путей в фильтрах |
 
-**Возвращает** `{ items, count }`, если `$count` не выключен явно (он включён по умолчанию),
-иначе — массив сущностей.
+**Возвращает** массив сущностей; `{ items, count }` — только при явном `$count=true`
+(отсутствующий `$count` по OData v4, раздел 11.2.5.5, означает `false`).
 
 ```ts
 // Репозиторий
@@ -338,6 +338,9 @@ interface GetManyResponse<T extends ObjectLiteral> {
 }
 ```
 
+Возвращается только при `$count=true`. Без `$count` ответ — обычный `T[]`, поэтому
+результат `executeQuery` имеет тип `T[] | GetManyResponse<T>` и требует сужения.
+
 ### `SqlOptions`
 
 ```ts
@@ -372,17 +375,17 @@ createQuery('$filter=year(createdAt) eq 2023', { alias: 'u', dialect: 'postgres'
 
 ### `parseQueryParams(query): ParsedQueryParams`
 
-Нормализация. `$skip` → целое, `$count` → boolean (**по умолчанию `true`**),
-пустой `$search` → `undefined`. Входной объект не мутируется.
+Нормализация. `$skip` → целое, `$count` → boolean (**по умолчанию `false`**, как требует
+OData v4, раздел 11.2.5.5), пустой `$search` → `undefined`. Входной объект не мутируется.
 
 `$top` различает «не передан» (`undefined`) и «передан ноль» (`0`): по OData v4
 (раздел 11.2.6.4) `$top=0` — корректный запрос пустой страницы, а не синоним отсутствия лимита.
 
 ```ts
 parseQueryParams({ $top: '10', $skip: ' 5 ', $search: '  ' });
-// → { $top: 10, $skip: 5, $search: undefined, $count: true }
+// → { $top: 10, $skip: 5, $search: undefined, $count: false }
 
-parseQueryParams({});          // → { $top: undefined, $skip: 0, $count: true }
+parseQueryParams({});          // → { $top: undefined, $skip: 0, $count: false }
 parseQueryParams({ $top: '0' }); // → { $top: 0, ... } — вернётся пустая страница
 ```
 

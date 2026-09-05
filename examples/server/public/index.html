@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Конструктор OData-запросов</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>Конструктор OData-запросов</h1>
+      <p class="subtitle">
+        Соберите запрос полями формы, посмотрите на получившийся URL и выполните его.
+        Данные живые — их отдаёт
+        <code>odata-v4-typeorm-improved</code> поверх TypeORM и SQLite.
+      </p>
+    </header>
+
+    <main class="layout">
+      <section class="panel builder" aria-label="Параметры запроса">
+        <div class="field">
+          <label for="resource">Сущность</label>
+          <select id="resource"></select>
+          <p class="hint" id="resource-hint"></p>
+        </div>
+
+        <div class="field">
+          <label for="filter">
+            $filter
+            <span class="tag">условие отбора</span>
+          </label>
+          <textarea
+            id="filter"
+            rows="2"
+            spellcheck="false"
+            placeholder="contains(title,'SQL') and id gt 2"
+          ></textarea>
+          <p class="hint">
+            Сравнения <code>eq ne gt ge lt le</code>, логика <code>and or not</code>,
+            арифметика <code>add sub mul div mod</code>, функции
+            <code>contains startswith tolower length substring year</code>.
+          </p>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="select">$select</label>
+            <input id="select" spellcheck="false" placeholder="id,title" />
+          </div>
+          <div class="field">
+            <label for="expand">$expand</label>
+            <input id="expand" spellcheck="false" placeholder="author,category" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="orderby">$orderby</label>
+          <input id="orderby" spellcheck="false" placeholder="title asc" />
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="top">$top</label>
+            <input id="top" type="number" min="0" max="100" placeholder="—" />
+          </div>
+          <div class="field">
+            <label for="skip">$skip</label>
+            <input id="skip" type="number" min="0" placeholder="—" />
+          </div>
+          <div class="field">
+            <label for="search">$search</label>
+            <input id="search" spellcheck="false" placeholder="—" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="checkbox">
+            <input id="count" type="checkbox" />
+            <span>$count — вернуть <code>{ items, count }</code> вместо массива</span>
+          </label>
+          <p class="hint">
+            Выключен по умолчанию, как требует OData: отсутствующий <code>$count</code>
+            означает <code>false</code>, и ответом будет обычный массив. Включите, чтобы
+            получить общее число строк по фильтрам — без учёта <code>$top</code> и
+            <code>$skip</code>.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button id="run" type="button" class="primary">Выполнить</button>
+          <button id="reset" type="button">Очистить</button>
+        </div>
+      </section>
+
+      <section class="panel result" aria-label="Результат">
+        <div class="field">
+          <label for="url">Итоговый URL</label>
+          <div class="url-row">
+            <code id="url" class="url"></code>
+            <button id="copy" type="button" title="Скопировать">Копировать</button>
+          </div>
+        </div>
+
+        <div class="status-row">
+          <span id="status" class="status status--idle">готов</span>
+          <span id="timing" class="timing"></span>
+        </div>
+
+        <pre id="output" class="output">Нажмите «Выполнить», чтобы увидеть ответ.</pre>
+      </section>
+
+      <section class="panel examples" aria-label="Готовые примеры">
+        <h2>Примеры</h2>
+        <p class="hint">
+          Нажмите на пример — он подставится в форму. Отмеченные
+          <span class="tag tag--error">400</span> показывают, как библиотека отвергает
+          неподдерживаемое, вместо того чтобы молча вернуть не те данные.
+        </p>
+        <ul id="examples" class="examples-list"></ul>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

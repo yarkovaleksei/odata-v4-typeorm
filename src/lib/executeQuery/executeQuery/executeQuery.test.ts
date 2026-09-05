@@ -13,8 +13,16 @@ describe('executeQuery', () => {
     userRepository = dataSource.getRepository(User);
   });
 
-  it('вернёт все записи', async () => {
+  it('вернёт все записи массивом: без $count счётчик не запрашивается', async () => {
     const users = await executeQuery(userRepository, {}, { alias });
+    const allRows = await userRepository.find();
+
+    expect(Array.isArray(users)).toBe(true);
+    expect(users).toEqual(allRows);
+  });
+
+  it('вернёт { items, count } при явном $count=true', async () => {
+    const users = await executeQuery(userRepository, { $count: 'true' }, { alias });
     const allRows = await userRepository.find();
 
     expect(users).toHaveProperty('items');
@@ -28,8 +36,19 @@ describe('executeQuery', () => {
       const users = await executeQuery(userRepository, { $search: 'bob' }, { alias });
       const bobRow = await userRepository.findOne({ where: { name: 'Bob' } });
 
-      expect(users).toHaveProperty('items');
-      expect(users).toHaveProperty('count');
+      expect(Array.isArray(users)).toBe(true);
+      expect((users as User[])[0]).toEqual(bobRow);
+      expect(users).toHaveLength(1);
+    });
+
+    it('вернёт 1 запись со счётчиком при $count=true', async () => {
+      const users = await executeQuery(
+        userRepository,
+        { $search: 'bob', $count: 'true' },
+        { alias }
+      );
+      const bobRow = await userRepository.findOne({ where: { name: 'Bob' } });
+
       expect((users as GetManyResponse<User>).items[0]).toEqual(bobRow);
       expect((users as GetManyResponse<User>).count).toEqual(1);
     });

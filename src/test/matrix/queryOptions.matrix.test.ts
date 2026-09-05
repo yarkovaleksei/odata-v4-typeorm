@@ -75,13 +75,13 @@ describe('$select', () => {
     const result = await rows(dataSource.getRepository(Author), { $select: 'id,name' }, 'Author');
 
     expect(result).toHaveLength(4);
-    expect(Object.keys(result[0]).sort()).toEqual(['id', 'name']);
+    expect(Object.keys(result[0]!).sort()).toEqual(['id', 'name']);
   });
 
   it('одно поле', async () => {
     const result = await rows(dataSource.getRepository(Author), { $select: 'name' }, 'Author');
 
-    expect(Object.keys(result[0])).toEqual(['name']);
+    expect(Object.keys(result[0]!)).toEqual(['name']);
   });
 
   it('сочетается с $filter', async () => {
@@ -92,7 +92,7 @@ describe('$select', () => {
     );
 
     expect(result.map((r) => r.id).sort()).toEqual([2, 3]);
-    expect(Object.keys(result[0]).sort()).toEqual(['age', 'id']);
+    expect(Object.keys(result[0]!).sort()).toEqual(['age', 'id']);
   });
 });
 
@@ -133,17 +133,17 @@ describe('$count', () => {
   });
 
   /**
-   * ОТСТУПЛЕНИЕ ОТ СПЕЦИФИКАЦИИ. По OData v4 отсутствующий `$count` эквивалентен `false`,
-   * то есть ответом должен быть массив. Здесь по умолчанию возвращается `{ items, count }`.
-   * Отступление зафиксировано в `docs/audit.md` (Н-01) и `docs/odata-support.md`.
-   * Тест закрепляет текущее поведение, чтобы его нельзя было изменить незаметно.
+   * OData v4, раздел 11.2.5.5: отсутствующий `$count` эквивалентен `$count=false`.
+   * До версии 2.0.0 библиотека отступала от этого и возвращала `{ items, count }`
+   * на каждый запрос, попутно выполняя лишний `COUNT(*)`. Тест закрепляет исправленное
+   * поведение, чтобы отступление не вернулось незаметно.
    */
-  it('без $count возвращает объект (отступление от спецификации)', async () => {
+  it('без $count возвращает массив, а не объект со счётчиком', async () => {
     const result = await executeQuery(dataSource.getRepository(Author), {}, { alias: 'Author' });
 
-    expect(Array.isArray(result)).toBe(false);
-    expect(result).toHaveProperty('items');
-    expect(result).toHaveProperty('count', 4);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toHaveLength(4);
+    expect(result).not.toHaveProperty('count');
   });
 });
 
@@ -156,7 +156,7 @@ describe('$expand', () => {
     );
 
     expect(result).toHaveLength(1);
-    expect(result[0].books.map((b) => b.id).sort()).toEqual([1, 2]);
+    expect(result[0]!.books.map((b) => b.id).sort()).toEqual([1, 2]);
   });
 
   it('загружает связь many-to-one', async () => {
@@ -166,7 +166,7 @@ describe('$expand', () => {
       'Book'
     );
 
-    expect(result[0].author?.name).toBe('Ada');
+    expect(result[0]!.author?.name).toBe('Ada');
   });
 
   it('делает LEFT JOIN: сущность без связанной записи остаётся в выдаче', async () => {
@@ -185,7 +185,7 @@ describe('$expand', () => {
       'Author'
     );
 
-    expect(Object.keys(result[0].books[0]).sort()).toEqual(['id', 'title']);
+    expect(Object.keys(result[0]!.books[0]!).sort()).toEqual(['id', 'title']);
   });
 
   it('вложенный $orderby сортирует связанные записи', async () => {
@@ -195,7 +195,7 @@ describe('$expand', () => {
       'Author'
     );
 
-    expect(result[0].books.map((b) => b.id)).toEqual([2, 1]);
+    expect(result[0]!.books.map((b) => b.id)).toEqual([2, 1]);
   });
 
   it('вложенный $expand второго уровня', async () => {
@@ -205,7 +205,7 @@ describe('$expand', () => {
       'Author'
     );
 
-    const firstBook = result[0].books.find((b) => b.id === 1);
+    const firstBook = result[0]!.books.find((b) => b.id === 1);
 
     expect(firstBook?.reviews.map((r) => r.id).sort()).toEqual([1, 2]);
   });
@@ -217,8 +217,8 @@ describe('$expand', () => {
       'Book'
     );
 
-    expect(result[0].author?.name).toBe('Ada');
-    expect(result[0].reviews).toHaveLength(2);
+    expect(result[0]!.author?.name).toBe('Ada');
+    expect(result[0]!.reviews).toHaveLength(2);
   });
 
   // Дефект A-02: алиас JOIN и алиас в WHERE должны совпадать.
@@ -248,7 +248,7 @@ describe('$expand', () => {
     );
 
     expect(result).toHaveLength(1);
-    expect(Object.keys(result[0].books[0]).sort()).toEqual(['id', 'title']);
+    expect(Object.keys(result[0]!.books[0]!).sort()).toEqual(['id', 'title']);
   });
 });
 
@@ -287,7 +287,7 @@ describe('комбинации опций', () => {
     );
 
     expect(result.map((r) => r.name)).toEqual(['Ada', 'Alan']);
-    expect(Object.keys(result[0]).sort()).toEqual(['id', 'name']);
+    expect(Object.keys(result[0]!).sort()).toEqual(['id', 'name']);
   });
 
   it('$expand + $filter по корню + пагинация', async () => {
@@ -298,7 +298,7 @@ describe('комбинации опций', () => {
     );
 
     expect(result.map((r) => r.id)).toEqual([1, 2]);
-    expect(result[0].books).toHaveLength(2);
+    expect(result[0]!.books).toHaveLength(2);
   });
 });
 
@@ -320,7 +320,7 @@ describe('$expand — вложенная пагинация', () => {
       'Author'
     );
 
-    expect(result[0].books.map((b) => b.id)).toEqual([1]);
+    expect(result[0]!.books.map((b) => b.id)).toEqual([1]);
   });
 
   it('вложенный $skip пропускает начало коллекции', async () => {
@@ -330,7 +330,7 @@ describe('$expand — вложенная пагинация', () => {
       'Author'
     );
 
-    expect(result[0].books.map((b) => b.id)).toEqual([2]);
+    expect(result[0]!.books.map((b) => b.id)).toEqual([2]);
   });
 
   it('вложенные $top и $skip работают вместе', async () => {
@@ -340,7 +340,7 @@ describe('$expand — вложенная пагинация', () => {
       'Author'
     );
 
-    expect(result[0].books.map((b) => b.id)).toEqual([2]);
+    expect(result[0]!.books.map((b) => b.id)).toEqual([2]);
   });
 
   it('вложенный $top=0 даёт пустую коллекцию', async () => {
@@ -350,7 +350,7 @@ describe('$expand — вложенная пагинация', () => {
       'Author'
     );
 
-    expect(result[0].books).toEqual([]);
+    expect(result[0]!.books).toEqual([]);
   });
 
   it('срез применяется к каждому родителю независимо', async () => {
@@ -372,7 +372,7 @@ describe('$expand — вложенная пагинация', () => {
     );
 
     // При сортировке по убыванию первой оказывается вторая книга
-    expect(result[0].books.map((b) => b.id)).toEqual([2]);
+    expect(result[0]!.books.map((b) => b.id)).toEqual([2]);
   });
 
   it('срез работает на втором уровне вложенности', async () => {
@@ -382,7 +382,7 @@ describe('$expand — вложенная пагинация', () => {
       'Author'
     );
 
-    const firstBook = result[0].books.find((b) => b.id === 1);
+    const firstBook = result[0]!.books.find((b) => b.id === 1);
 
     // У первой книги два отзыва, остаться должен один
     expect(firstBook?.reviews.map((r) => r.id)).toEqual([1]);
@@ -395,7 +395,7 @@ describe('$expand — вложенная пагинация', () => {
       'Author'
     );
 
-    expect(result[0].books).toHaveLength(2);
+    expect(result[0]!.books).toHaveLength(2);
   });
 
   it('$count считает корневые сущности, а не связанные', async () => {
@@ -436,8 +436,8 @@ describe('приоритет сортировки при $expand', () => {
     );
 
     // Barbara (id 4) книг не имеет и обязана остаться последней
-    expect(result[result.length - 1].id).toBe(4);
-    expect(result[result.length - 1].books).toEqual([]);
+    expect(result[result.length - 1]!.id).toBe(4);
+    expect(result[result.length - 1]!.books).toEqual([]);
   });
 
   it('сортировка связи по-прежнему упорядочивает записи внутри родителя', async () => {
@@ -447,8 +447,8 @@ describe('приоритет сортировки при $expand', () => {
       'Author'
     );
 
-    expect(result[0].id).toBe(1);
-    expect(result[0].books.map((b) => b.id)).toEqual([2, 1]);
+    expect(result[0]!.id).toBe(1);
+    expect(result[0]!.books.map((b) => b.id)).toEqual([2, 1]);
   });
 
   it('обе сортировки работают вместе со срезом связи', async () => {
@@ -460,6 +460,6 @@ describe('приоритет сортировки при $expand', () => {
 
     expect(result.map((a) => a.id)).toEqual([4, 3, 2, 1]);
     // У Ada из двух книг остаётся последняя по возрастанию id
-    expect(result[result.length - 1].books.map((b) => b.id)).toEqual([2]);
+    expect(result[result.length - 1]!.books.map((b) => b.id)).toEqual([2]);
   });
 });

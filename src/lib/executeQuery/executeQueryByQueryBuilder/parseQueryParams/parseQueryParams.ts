@@ -4,7 +4,7 @@
  * HTTP-клиенты и Express передают значения в основном строками; здесь:
  * - `$search` — обрезаются пробелы, пустые строки становятся `undefined` (поиск не применяется).
  * - `$top` / `$skip` — приводятся к целым числам (десятичная система), нечисловые строки → `0`.
- * - `$count` — по умолчанию `true`, если параметр отсутствует; строки `'true'`/`'false'` (без учёта регистра)
+ * - `$count` — по умолчанию `false`, как требует OData v4; строки `'true'`/`'false'` (без учёта регистра)
  *   и булевы значения преобразуются в boolean; любое другое значение после приведения к строке → `false`.
  *
  * Остальные ключи (`$filter`, `$orderby`, …) копируются как есть в поверхностный клон объекта.
@@ -96,13 +96,14 @@ function toOptionalNumber(value?: string | number): number | undefined {
  * @returns новый объект с гарантированными типами для `$top`, `$skip`, `$count`
  *   и нормализованным `$search`. Входной объект не мутируется.
  *
- * @remarks `$count` по умолчанию — `true`. Это осознанное отличие от спецификации OData v4,
- *   где отсутствующий `$count` означает `false`; здесь клиент по умолчанию получает
- *   `{ items, count }`. Чтобы получить голый массив, нужно явно передать `$count=false`.
+ * @remarks `$count` по умолчанию — `false`, как и требует OData v4 (раздел 11.2.5.5):
+ *   отсутствующий параметр означает «счётчик не нужен», и ответом будет обычный массив.
+ *   До версии 2.0.0 здесь стояло `true`, и каждый запрос без `$count` тянул за собой
+ *   лишний `COUNT(*)`.
  *
  * @example
  * parseQueryParams({ $top: '10', $skip: ' 5 ', $search: '  ' });
- * // → { $top: 10, $skip: 5, $search: undefined, $count: true }
+ * // → { $top: 10, $skip: 5, $search: undefined, $count: false }
  */
 export const parseQueryParams = (query: ParsedQueryParams | QueryParams): ParsedQueryParams => {
   // Поверхностная копия, чтобы не мутировать входной объект (например, `req.query`).
@@ -120,8 +121,9 @@ export const parseQueryParams = (query: ParsedQueryParams | QueryParams): Parsed
   parsedQuery.$top = toOptionalNumber(query.$top);
   // Для $skip такое различие не нужно: skip(0) и отсутствие смещения — это одно и то же.
   parsedQuery.$skip = toNumber(query.$skip);
-  // Отсутствующий $count → true (см. @remarks выше); присутствующий разбирается строго.
-  parsedQuery.$count = typeof query.$count === 'undefined' ? true : booleanByString(query.$count);
+  // Отсутствующий $count → false, как в спецификации. booleanByString сам возвращает false
+  // для undefined, поэтому отдельная ветка не нужна.
+  parsedQuery.$count = booleanByString(query.$count);
 
   return parsedQuery;
 };

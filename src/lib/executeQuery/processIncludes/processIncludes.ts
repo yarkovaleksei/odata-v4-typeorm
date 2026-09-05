@@ -89,6 +89,12 @@ export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
 
         orders.forEach((orderItem) => {
           const [field, order] = orderItem.split(' ');
+
+          // Пустой сегмент возможен при лишней запятой во вложенном $orderby.
+          if (!field) {
+            return;
+          }
+
           // addOrderBy, а не orderBy: сортировки корня и всех связей накапливаются в одном ORDER BY.
           queryBuilder = queryBuilder.addOrderBy(field, order as 'ASC' | 'DESC');
         });

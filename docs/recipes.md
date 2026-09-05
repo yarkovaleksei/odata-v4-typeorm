@@ -126,7 +126,8 @@ app.get('/api/documents', async (req, res) => {
 
 ## Форма ответа: массив или `{ items, count }`
 
-`$count` **включён по умолчанию**, поэтому базовая форма ответа — объект.
+`$count` по умолчанию выключен, поэтому базовая форма ответа — массив. Объект со
+счётчиком возвращается только на явный `$count=true`.
 
 ```ts
 const result = await executeQuery(repo, req.query, { alias: 'User' });
@@ -136,11 +137,18 @@ const items = Array.isArray(result) ? result : result.items;
 const total = Array.isArray(result) ? result.length : result.count;
 ```
 
-Всегда возвращать массив:
+Всегда возвращать массив — запретить клиенту менять форму ответа:
 
 ```ts
 const result = await executeQuery(repo, { ...req.query, $count: 'false' }, { alias: 'User' });
 // result: User[]
+```
+
+Всегда возвращать счётчик — независимо от того, что прислал клиент:
+
+```ts
+const result = await executeQuery(repo, { ...req.query, $count: 'true' }, { alias: 'User' });
+// result: { items: User[]; count: number }
 ```
 
 Получить только счётчик, без строк — `$top=0`:
@@ -150,10 +158,8 @@ const result = await executeQuery(repo, { $top: '0', $count: 'true' }, { alias: 
 // { items: [], count: 42 }
 ```
 
-Всегда возвращать счётчик — ничего делать не нужно, это поведение по умолчанию.
-
-> Каждый запрос со счётчиком делает **два** обращения к БД. Если счётчик не нужен,
-> `$count=false` заметно дешевле.
+> Запрос со счётчиком делает **два** обращения к БД (`getManyAndCount`), поэтому включать
+> `$count` стоит только там, где счётчик действительно нужен.
 
 ---
 

@@ -77,8 +77,10 @@ describe('executeQueryByQueryBuilder', () => {
     // $top='0' — это явно запрошенная пустая страница (OData v4, раздел 11.2.6.4),
     // поэтому take(0) вызывается. «Лимита нет» выражается отсутствием $top, а не нулём.
     expect(mockQueryBuilder.take).toHaveBeenCalledWith(0);
-    expect(mockQueryBuilder.getManyAndCount).toHaveBeenCalled(); // $count по умолчанию true
-    expect(mockQueryBuilder.getMany).not.toHaveBeenCalled();
+    // $count не передан → по OData v4 (раздел 11.2.5.5) он равен false,
+    // поэтому лишний COUNT(*) не выполняется.
+    expect(mockQueryBuilder.getMany).toHaveBeenCalled();
+    expect(mockQueryBuilder.getManyAndCount).not.toHaveBeenCalled();
   });
 
   it('не вызывает take, если $top не передан', async () => {

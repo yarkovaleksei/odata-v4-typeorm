@@ -15,6 +15,7 @@ GET /api/users?$filter=contains(name,'ali')&$select=id,name&$orderby=name asc&$t
 
 ## Содержание
 
+- [Попробовать вживую](#попробовать-вживую)
 - [Установка](#установка)
 - [Быстрый старт](#быстрый-старт)
 - [Что поддерживается](#что-поддерживается)
@@ -47,6 +48,21 @@ npm install typeorm
 ```
 
 Требуется Node.js 20 или новее.
+
+## Попробовать вживую
+
+В репозитории есть демо-сервер с **интерактивным конструктором запросов**: собираете
+запрос полями формы, видите получившийся URL и сразу ответ сервера.
+
+```bash
+yarn install
+yarn server
+```
+
+Затем откройте <http://localhost:3001/>. Ничего поднимать не нужно — демо работает
+на SQLite, база создаётся и наполняется при старте.
+
+Там же лежит коллекция Postman на 40 запросов: [examples/postman/](./examples/postman/).
 
 ## Быстрый старт
 
@@ -86,12 +102,25 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc"
 Ответ:
 
 ```json
+[
+  { "id": 1, "name": "Alice", "email": "alice@example.com" },
+  { "id": 2, "name": "Bob", "email": "bob@example.com" }
+]
+```
+
+Нужно ещё и общее число строк — добавьте `$count=true`:
+
+```bash
+curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc&\$count=true"
+```
+
+```json
 {
   "items": [
     { "id": 1, "name": "Alice", "email": "alice@example.com" },
     { "id": 2, "name": "Bob", "email": "bob@example.com" }
   ],
-  "count": 2
+  "count": 42
 }
 ```
 
@@ -103,7 +132,7 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc"
 | `$select` | ✅ | `$select=id,name` — в том числе `$select=author/name` |
 | `$orderby` | ✅ | `$orderby=name desc,id asc` |
 | `$top` / `$skip` | ✅ | `$top=20&$skip=40` |
-| `$count` | ⚠️ | `$count=false` — **включён по умолчанию**, отступление от спецификации |
+| `$count` | ✅ | `$count=true` — по умолчанию выключен, ответ тогда обычный массив |
 | `$expand` | ⚠️ | `$expand=posts($select=id,title;$top=2)` — вложенный срез делается после запроса, не в SQL |
 | `$search` | ⚠️ | `$search=alice` — упрощённая семантика, только корневая сущность |
 
@@ -313,16 +342,18 @@ curl "http://localhost:3001/api/users?\$filter=name%20eq%20'Alice'"
 
 ## Важные особенности
 
-### `$count` включён по умолчанию
+### Форма ответа зависит от `$count`
 
-Отличие от спецификации OData, о которое спотыкаются первым делом.
+`$count` управляет тем, что вернётся: массив или объект со счётчиком. По умолчанию он
+выключен — как и требует OData v4 (раздел 11.2.5.5).
 
 ```ts
 await executeQuery(repo, {}, { alias: 'User' });
-// → { items: [...], count: 42 }      ← объект, не массив
+// → [...]                            ← массив, одно обращение к БД
 
-await executeQuery(repo, { $count: 'false' }, { alias: 'User' });
-// → [...]                            ← массив
+await executeQuery(repo, { $count: 'true' }, { alias: 'User' });
+// → { items: [...], count: 42 }      ← объект; count — число строк по фильтрам,
+//                                       без учёта $top и $skip
 ```
 
 Универсальное сужение типа:
@@ -332,8 +363,13 @@ const result = await executeQuery(repo, req.query, { alias: 'User' });
 const items = Array.isArray(result) ? result : result.items;
 ```
 
-Учтите: со счётчиком каждый запрос делает **два** обращения к БД. Если счётчик не нужен,
-`$count=false` заметно дешевле.
+Учтите: со счётчиком запрос делает **два** обращения к БД (`getManyAndCount`), поэтому
+включайте `$count` только там, где счётчик действительно нужен, — например для пагинации.
+
+> **Изменение в 2.0.0.** До этой версии `$count` был включён по умолчанию, и ответом на
+> любой запрос был объект `{ items, count }`. Если вы обновляетесь с 1.x и полагались на
+> эту форму, добавьте `$count=true` в запрос либо разворачивайте результат через
+> `Array.isArray`, как в примере выше.
 
 ### Про `alias`
 
@@ -486,7 +522,8 @@ yarn db:up && yarn test:all  # матрица на трёх СУБД, базы �
 | `yarn docker:test:all` | Матрица на трёх СУБД внутри контейнера |
 | `yarn docker:sh` | Оболочка внутри контейнера |
 | `yarn docker:down` | Погасить контейнеры и удалить тома |
-| `yarn server` | Демо-сервер из `examples/server` с автоперезапуском |
+| `yarn server` | Демо-сервер и конструктор запросов на <http://localhost:3001/> |
+| `yarn server:typecheck` | Проверка типов демо-сервера |
 | `yarn release` | `build` + `npm publish` |
 | `yarn release:beta` | `build` + `npm publish --tag beta` |
 

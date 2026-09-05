@@ -22,7 +22,7 @@ import {
 } from '../../lib';
 import { Author } from '../entity';
 import { dataSource } from '../setup/dataSource';
-import { authorIds, rows } from './helpers';
+import { authorIds, rows, unwrap } from './helpers';
 
 describe('alias', () => {
   /**
@@ -34,7 +34,7 @@ describe('alias', () => {
     const qb = dataSource.getRepository(Author).createQueryBuilder('u');
     const result = await executeQuery(qb, { $filter: "name eq 'Ada'" });
 
-    expect((result as { items: Author[] }).items.map((a) => a.id)).toEqual([1]);
+    expect(unwrap<Author>(result as Author[]).map((a) => a.id)).toEqual([1]);
   });
 
   it('произвольный алиас работает вместе с $expand и путями в фильтре', async () => {
@@ -44,7 +44,7 @@ describe('alias', () => {
       $filter: "books/title eq 'Analytical Engine'",
     });
 
-    expect((result as { items: Author[] }).items.map((a) => a.id)).toEqual([1]);
+    expect(unwrap<Author>(result as Author[]).map((a) => a.id)).toEqual([1]);
   });
 
   it('имя сущности по-прежнему принимается', async () => {
@@ -73,7 +73,7 @@ describe('alias', () => {
     const qb = dataSource.getRepository(Author).createQueryBuilder('u');
     const result = await executeQuery(qb, { $select: 'id' }, { alias: 'u' });
 
-    expect((result as { items: Author[] }).items).toHaveLength(4);
+    expect(unwrap<Author>(result as Author[])).toHaveLength(4);
   });
 });
 
@@ -93,7 +93,7 @@ describe('maxTop', () => {
       { alias: 'Author', maxTop: 2 }
     );
 
-    expect((limited as { items: Author[] }).items).toHaveLength(2);
+    expect(unwrap<Author>(limited as Author[])).toHaveLength(2);
   });
 
   it('не трогает $top в пределах лимита', async () => {
@@ -103,7 +103,7 @@ describe('maxTop', () => {
       { alias: 'Author', maxTop: 10 }
     );
 
-    expect((result as { items: Author[] }).items).toHaveLength(1);
+    expect(unwrap<Author>(result as Author[])).toHaveLength(1);
   });
 
   it('не ограничивает запрос без $top', async () => {
@@ -114,7 +114,7 @@ describe('maxTop', () => {
     );
 
     // maxTop — потолок для явно запрошенной страницы, а не лимит по умолчанию
-    expect((result as { items: Author[] }).items).toHaveLength(4);
+    expect(unwrap<Author>(result as Author[])).toHaveLength(4);
   });
 });
 
@@ -225,7 +225,7 @@ describe('белые списки полей и связей', () => {
       { alias: 'Author', allowedExpands: ['books', 'reviews'] }
     );
 
-    expect((result as { items: Author[] }).items[0].books).toHaveLength(2);
+    expect(unwrap<Author>(result as Author[])[0]!.books).toHaveLength(2);
   });
 
   it('поле связи задаётся полным путём от корня', async () => {
@@ -241,7 +241,7 @@ describe('белые списки полей и связей', () => {
       }
     );
 
-    expect((result as { items: Author[] }).items).toHaveLength(1);
+    expect(unwrap<Author>(result as Author[])).toHaveLength(1);
   });
 
   it('вложенное поле связи вне списка отвергается', async () => {
@@ -319,7 +319,7 @@ describe('классификация ошибок', () => {
  */
 describe('$search при нестандартной namingStrategy', () => {
   class SnakeNamingStrategy extends DefaultNamingStrategy implements NamingStrategyInterface {
-    columnName(propertyName: string, customName: string): string {
+    override columnName(propertyName: string, customName: string): string {
       return customName || propertyName.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
     }
   }
@@ -372,7 +372,7 @@ describe('$search при нестандартной namingStrategy', () => {
       { alias: 'Account' }
     );
 
-    expect((result as { items: Account[] }).items.map((a) => a.firstName)).toEqual(['Anna']);
+    expect(unwrap<Account>(result as Account[]).map((a) => a.firstName)).toEqual(['Anna']);
   });
 
   it('ищет по числовой колонке', async () => {
@@ -382,7 +382,7 @@ describe('$search при нестандартной namingStrategy', () => {
       { alias: 'Account' }
     );
 
-    expect((result as { items: Account[] }).items.map((a) => a.firstName)).toEqual(['Boris']);
+    expect(unwrap<Account>(result as Account[]).map((a) => a.firstName)).toEqual(['Boris']);
   });
 
   it('$filter по тому же полю тоже работает', async () => {
@@ -392,7 +392,7 @@ describe('$search при нестандартной namingStrategy', () => {
       { alias: 'Account' }
     );
 
-    expect((result as { items: Account[] }).items).toHaveLength(1);
+    expect(unwrap<Account>(result as Account[])).toHaveLength(1);
   });
 });
 
@@ -446,17 +446,17 @@ describe('колонки с select: false', () => {
     executeQuery(hiddenDataSource.getRepository(Credential), params, { alias: 'Credential' });
 
   it('скрытая колонка не попадает в ответ по умолчанию', async () => {
-    const result = (await query({})) as { items: Credential[] };
+    const result = unwrap<Credential>((await query({})) as Credential[]);
 
-    expect(result.items[0]).toEqual({ id: 1, login: 'root' });
+    expect(result[0]).toEqual({ id: 1, login: 'root' });
     expect(JSON.stringify(result)).not.toContain('SECRET-HASH');
   });
 
   it('поведение совпадает с find() самого TypeORM', async () => {
-    const viaLibrary = (await query({})) as { items: Credential[] };
+    const viaLibrary = unwrap<Credential>((await query({})) as Credential[]);
     const viaTypeorm = await hiddenDataSource.getRepository(Credential).find();
 
-    expect(viaLibrary.items).toEqual(viaTypeorm);
+    expect(viaLibrary).toEqual(viaTypeorm);
   });
 
   it.each([
@@ -470,8 +470,8 @@ describe('колонки с select: false', () => {
   });
 
   it('обычные колонки по-прежнему доступны', async () => {
-    const result = (await query({ $select: 'id,login' })) as { items: Credential[] };
+    const result = unwrap<Credential>((await query({ $select: 'id,login' })) as Credential[]);
 
-    expect(result.items[0]).toEqual({ id: 1, login: 'root' });
+    expect(result[0]).toEqual({ id: 1, login: 'root' });
   });
 });

@@ -45,6 +45,15 @@ export function reviewIds(query: QueryParams): Promise<number[]> {
   return ids(dataSource.getRepository(Review), query, 'Review');
 }
 
+/**
+ * Разворачивает ответ в массив независимо от того, вернулся он массивом или `{ items, count }`.
+ *
+ * Форма зависит от `$count`, а большинству проверок она безразлична — важны сами строки.
+ */
+export function unwrap<T extends ObjectLiteral>(result: T[] | { items: T[] }): T[] {
+  return Array.isArray(result) ? result : result.items;
+}
+
 /** Полный результат без приведения к id — когда проверяется форма ответа или связи. */
 export async function rows<T extends ObjectLiteral>(
   repository: Repository<T>,

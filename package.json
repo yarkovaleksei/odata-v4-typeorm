@@ -1,6 +1,6 @@
 {
   "name": "odata-v4-typeorm-improved",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "OData to TypeORM query compiler",
   "main": "build/src/lib/index.js",
   "types": "build/src/lib/index.d.ts",
@@ -41,7 +41,8 @@
     "db:up": "docker compose up -d --wait postgres mysql",
     "release": "yarn build && npm publish",
     "release:beta": "yarn build && npm publish --tag beta",
-    "server": "cd ./examples/server && yarn install && yarn serve"
+    "server": "nodemon --watch examples/server/src --watch src/lib --ext ts --exec \"ts-node --project examples/server/tsconfig.json examples/server/src/server.ts\"",
+    "server:typecheck": "tsc --noEmit --project examples/server/tsconfig.json"
   },
   "repository": {
     "type": "git",
@@ -76,13 +77,16 @@
     "@types/pg": "^8.20.0",
     "eslint": "^10.1.0",
     "eslint-plugin-typeorm-typescript": "^0.5.3",
+    "express": "^5.2.1",
     "install-peers-cli": "^2.2.0",
     "jest": "^30.3.0",
     "jiti": "^2.6.1",
     "mysql2": "^3.24.3",
+    "nodemon": "^3.1.14",
     "pg": "^8.20.0",
     "sqlite3": "^6.0.1",
     "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
     "typeorm": "^0.3.28",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.57.2"

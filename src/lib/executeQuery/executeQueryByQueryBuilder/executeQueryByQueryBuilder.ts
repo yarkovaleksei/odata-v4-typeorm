@@ -238,7 +238,7 @@ function assertAllowed(
  *   Значения могут быть строками — нормализацией занимается `parseQueryParams`.
  * @param options - опции выполнения: `alias` корневой сущности, `maxTop`, белые списки
  *   `allowedFields` и `allowedExpands`.
- * @returns массив сущностей либо `{ items, count }`, если `$count` не выключен явно.
+ * @returns массив сущностей либо `{ items, count }`, если передан `$count=true`.
  *
  * @remarks `alias` может быть любым: метаданные берутся у самого построителя. Поиск через
  *   `connection.getMetadata(alias)` остаётся запасным путём — тогда алиас должен совпадать
@@ -340,6 +340,12 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
       // TypeORM в этом случае подставит ASC.
       const [field, order] = orderItem.split(' ');
 
+      // Пустой сегмент возможен при лишней запятой в $orderby; добавлять его в ORDER BY
+      // нельзя — получится синтаксическая ошибка SQL.
+      if (!field) {
+        return;
+      }
+
       queryBuilder = queryBuilder.addOrderBy(field, order as 'ASC' | 'DESC');
     });
   }
@@ -378,8 +384,8 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
     queryBuilder = queryBuilder.take(guardLimit);
   }
 
-  // $count по умолчанию true (см. parseQueryParams), поэтому форма ответа по умолчанию —
-  // объект { items, count }, а не массив. Это отличается от спецификации OData.
+  // $count по умолчанию false (см. parseQueryParams), как требует OData v4: без явного
+  // запроса счётчика возвращается обычный массив и выполняется один запрос вместо двух.
   if (parsedQueryWithoutSearch.$count) {
     // getManyAndCount делает два запроса: страницу данных и COUNT по тем же условиям без limit/offset.
     const resultData = await queryBuilder.getManyAndCount();

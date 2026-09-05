@@ -89,5 +89,10 @@ export type ParsedQueryParams = Pick<
    */
   $top?: number;
   $skip: number;
+  /**
+   * Нужен ли счётчик. Отсутствующий в запросе `$count` даёт `false` — так требует
+   * OData v4 (раздел 11.2.5.5), и от этого зависит форма ответа: массив против
+   * `{ items, count }`.
+   */
   $count: boolean;
 };

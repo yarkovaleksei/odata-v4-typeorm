@@ -142,11 +142,12 @@ describe('parseQueryParams', () => {
   });
 
   describe('$count', () => {
-    it('должен установить значение по умолчанию true, если $count не передан', () => {
+    it('должен установить значение по умолчанию false, если $count не передан', () => {
       const query: QueryParams = {};
       const result = parseQueryParams(query);
 
-      expect(result.$count).toBe(true);
+      // OData v4, раздел 11.2.5.5: отсутствующий $count эквивалентен $count=false.
+      expect(result.$count).toBe(false);
     });
 
     it('должен оставить булево true', () => {

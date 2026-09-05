@@ -97,6 +97,30 @@ interface Operand {
   isNull: boolean;
 }
 
+/**
+ * Достаёт аргумент функции OData по номеру.
+ *
+ * Число аргументов проверяет уже грамматика парсера: `contains(name)` без второго
+ * операнда до обхода не доходит, отвергается как `ODataParseError`. Но инвариант держится
+ * на чужой библиотеке, а не на типах, поэтому проверка сделана явной — иначе отсутствующий
+ * аргумент ушёл бы в `Visit(undefined)`, где базовый класс тихо ничего не сделает,
+ * и на выходе получился бы синтаксически битый SQL.
+ *
+ * @throws {ODataUnsupportedError} если аргумента нет.
+ */
+function argumentAt(params: readonly Token[], index: number, method: string): Token {
+  const param = params[index];
+
+  if (!param) {
+    throw new ODataUnsupportedError(
+      `${method}() with ${params.length} argument(s)`,
+      params.map((p) => p.raw).join(', ')
+    );
+  }
+
+  return param;
+}
+
 export class TypeOrmVisitor extends Visitor {
   /**
    * Дочерние посетители — по одному на каждую связь, попавшую в запрос.
@@ -104,7 +128,7 @@ export class TypeOrmVisitor extends Visitor {
    * {@link TypeOrmVisitor.resolveNavigationChain} (для путей `связь/поле` в фильтрах и сортировке).
    * Дальше дерево разворачивается в цепочку `leftJoin` в `processIncludes`.
    */
-  public includes: TypeOrmVisitor[] = [];
+  public override includes: TypeOrmVisitor[] = [];
 
   /**
    * SQL-алиас таблицы для этой ветки AST.
@@ -145,13 +169,6 @@ export class TypeOrmVisitor extends Visitor {
    */
   private lastLiteralWasNull = false;
 
-  /**
-   * Служебный признак: include создан ради JOIN (фильтр или сортировка по пути `связь/поле`),
-   * а не по явному `$expand`. Первый же `$expand` этой связи снимает флаг и переводит
-   * посетитель в обычный режим — с выборкой колонок.
-   */
-  private isVirtual = false;
-
   /** Целевая СУБД: определяет, какие SQL-функции подставлять для функций OData. */
   private readonly dialect: SqlDialect;
 
@@ -176,7 +193,7 @@ export class TypeOrmVisitor extends Visitor {
    *
    * @throws {ODataUnsupportedError} для узла, который библиотека не умеет транслировать.
    */
-  Visit(node: Token, context?: Context): this {
+  override Visit(node: Token, context?: Context): this {
     if (node) {
       const handlerName = `Visit${node.type}` as keyof this;
 
@@ -199,7 +216,7 @@ export class TypeOrmVisitor extends Visitor {
    * @param table - имя таблицы; подставляется в SQL как есть, без экранирования, поэтому
    *   передавать сюда пользовательский ввод нельзя.
    */
-  from(table: string) {
+  override from(table: string) {
     let sql = `SELECT ${this.select} FROM ${table} WHERE ${this.where} ORDER BY ${this.orderby}`;
 
     if (typeof this.skip == 'number') {
@@ -344,7 +361,7 @@ export class TypeOrmVisitor extends Visitor {
    * Обработка узла с несколькими query options: сначала сортируем дочерние токены в нужном порядке,
    * затем рекурсивно делегируем в `Visit`.
    */
-  protected VisitQueryOptions(node: Token, context: Context) {
+  protected override VisitQueryOptions(node: Token, context: Context) {
     node.value.options
       .sort(
         (a: Token, b: Token) =>
@@ -365,7 +382,7 @@ export class TypeOrmVisitor extends Visitor {
    * `parameterSeed` передаётся в дочерний посетитель и забирается обратно, чтобы сквозная
    * нумерация `:p0, :p1, …` не пересекалась между корнем и вложенными ветками.
    */
-  protected VisitExpand(node: Token) {
+  protected override VisitExpand(node: Token) {
     node.value.items.forEach((item: Token) => {
       const navigationProperty = item.value.path.raw;
 
@@ -373,12 +390,10 @@ export class TypeOrmVisitor extends Visitor {
         this.includes.find((v) => v.navigationProperty === navigationProperty) ??
         this.createInclude(navigationProperty);
 
-      // Служебные значения виртуального include ('' / '1 = 1') сбрасываются, иначе разбор
-      // вложенных опций дописал бы SQL к ним: `$expand=books($orderby=id)` дал бы '1Author_books.id'.
-      // Повторный $expand той же связи сбрасывает только умолчания, но сохраняет уже
-      // накопленный $select — так две ветки объединяются в один JOIN с общим списком колонок.
-      visitor.isVirtual = false;
-
+      // Служебные значения ('1 = 1' / '1') сбрасываются, иначе разбор вложенных опций
+      // дописал бы SQL к ним: `$expand=books($orderby=id)` дал бы '1Author_books.id'.
+      // Накопленный $select при этом сохраняется — так повторный $expand одной связи
+      // объединяется в один JOIN с общим списком колонок.
       if (visitor.where === '1 = 1') {
         visitor.where = '';
       }
@@ -426,7 +441,7 @@ export class TypeOrmVisitor extends Visitor {
    * если include не найден, связь всё равно резолвится (создаётся виртуальный JOIN), поэтому
    * `$select=books/title` работает и без явного `$expand`.
    */
-  protected VisitSelectItem(node: Token, context: Context) {
+  protected override VisitSelectItem(node: Token, context: Context) {
     if (this.select !== '' && !this.select.trim().endsWith(',')) {
       this.select += ', ';
     }
@@ -463,7 +478,7 @@ export class TypeOrmVisitor extends Visitor {
    * Для каждого сегмента-связи гарантируется наличие include-посетителя; последний сегмент —
    * имя колонки, оно префиксуется алиасом самой глубокой связи.
    */
-  protected VisitPropertyPathExpression(node: Token, context: Context) {
+  protected override VisitPropertyPathExpression(node: Token, context: Context) {
     // Лямбда-операторы отлавливаются здесь, а не в Visit: `odata-v4-parser` 0.1.29 не создаёт
     // для них отдельного узла — он молча отбрасывает тело лямбды и оставляет обычный путь
     // свойства, у которого в `raw` ещё виден исходный текст. Без этой проверки
@@ -530,7 +545,6 @@ export class TypeOrmVisitor extends Visitor {
 
     visitor.parameterSeed = this.parameterSeed;
     visitor.navigationProperty = navigationProperty;
-    visitor.isVirtual = true;
     visitor.select = '';
     visitor.where = '1 = 1';
 
@@ -548,7 +562,7 @@ export class TypeOrmVisitor extends Visitor {
    * Пути `связь/поле` сюда не доходят — их целиком разбирает
    * {@link TypeOrmVisitor.VisitPropertyPathExpression}.
    */
-  protected VisitODataIdentifier(node: Token, context: Context) {
+  protected override VisitODataIdentifier(node: Token, context: Context) {
     this.trackField(node.value.name);
 
     this.append(context, this.qualify(node.value.name));
@@ -641,32 +655,32 @@ export class TypeOrmVisitor extends Visitor {
   // ───────────────────────────────────────────────────────────────────────────
 
   /** Равенство `eq`; сравнение с `null` превращается в `IS NULL`. */
-  protected VisitEqualsExpression(node: Token, context: Context) {
+  protected override VisitEqualsExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '=', 'IS NULL', true);
   }
 
   /** Неравенство `ne`; сравнение с `null` превращается в `IS NOT NULL`. */
-  protected VisitNotEqualsExpression(node: Token, context: Context) {
+  protected override VisitNotEqualsExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '<>', 'IS NOT NULL', false);
   }
 
   /** Строго меньше `lt`. */
-  protected VisitLesserThanExpression(node: Token, context: Context) {
+  protected override VisitLesserThanExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '<');
   }
 
   /** Меньше либо равно `le`. */
-  protected VisitLesserOrEqualsExpression(node: Token, context: Context) {
+  protected override VisitLesserOrEqualsExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '<=');
   }
 
   /** Строго больше `gt`. */
-  protected VisitGreaterThanExpression(node: Token, context: Context) {
+  protected override VisitGreaterThanExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '>');
   }
 
   /** Больше либо равно `ge`. */
-  protected VisitGreaterOrEqualsExpression(node: Token, context: Context) {
+  protected override VisitGreaterOrEqualsExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '>=');
   }
 
@@ -752,7 +766,7 @@ export class TypeOrmVisitor extends Visitor {
    * в `IS NULL` в {@link TypeOrmVisitor.visitComparison}. Номер плейсхолдера при этом
    * расходуется — безобидно, нумерация остаётся сквозной и согласованной с картой параметров.
    */
-  protected VisitLiteral(node: Token, context: Context) {
+  protected override VisitLiteral(node: Token, context: Context) {
     // Парсер отдаёт для `null` узел Literal со значением-типом 'null'.
     this.lastLiteralWasNull = node.value === 'null';
 
@@ -813,19 +827,19 @@ export class TypeOrmVisitor extends Visitor {
    *
    * @throws {ODataUnsupportedError} для функции, у которой нет трансляции в SQL.
    */
-  protected VisitMethodCallExpression(node: Token, context: Context) {
+  protected override VisitMethodCallExpression(node: Token, context: Context) {
     const method = node.value.method as string;
     const params: Token[] = node.value.parameters || [];
 
     switch (method) {
       case 'contains':
-        this.visitLikeExpression(params, context, (value) => `%${value}%`);
+        this.visitLikeExpression(params, context, (value) => `%${value}%`, 'contains');
         break;
       case 'startswith':
-        this.visitLikeExpression(params, context, (value) => `${value}%`);
+        this.visitLikeExpression(params, context, (value) => `${value}%`, 'startswith');
         break;
       case 'endswith':
-        this.visitLikeExpression(params, context, (value) => `%${value}`);
+        this.visitLikeExpression(params, context, (value) => `%${value}`, 'endswith');
         break;
 
       case 'indexof':
@@ -863,7 +877,7 @@ export class TypeOrmVisitor extends Visitor {
 
       case 'trim':
         this.append(context, 'TRIM(');
-        this.Visit(params[0], context);
+        this.Visit(argumentAt(params, 0, 'trim'), context);
         this.append(context, ')');
         break;
 
@@ -898,7 +912,7 @@ export class TypeOrmVisitor extends Visitor {
    */
   private visitSimpleFunction(sqlFunction: string, params: Token[], context: Context) {
     this.append(context, `${sqlFunction}(`);
-    this.Visit(params[0], context);
+    this.Visit(argumentAt(params, 0, sqlFunction), context);
     this.append(context, ')');
   }
 
@@ -910,12 +924,15 @@ export class TypeOrmVisitor extends Visitor {
    * (искомое IN строка) соответственно, `CHARINDEX` — (искомое, строка).
    */
   private visitIndexOf(params: Token[], context: Context) {
+    const haystack = argumentAt(params, 0, 'indexof');
+    const needle = argumentAt(params, 1, 'indexof');
+
     switch (this.dialect) {
       case 'mssql':
         this.append(context, 'CHARINDEX(');
-        this.Visit(params[1], context);
+        this.Visit(needle, context);
         this.append(context, ', ');
-        this.Visit(params[0], context);
+        this.Visit(haystack, context);
         this.append(context, ') - 1');
         break;
 
@@ -923,18 +940,18 @@ export class TypeOrmVisitor extends Visitor {
       case 'ansi':
         // POSITION(искомое IN строка) — ANSI-форма, её же понимает PostgreSQL.
         this.append(context, 'POSITION(');
-        this.Visit(params[1], context);
+        this.Visit(needle, context);
         this.append(context, ' IN ');
-        this.Visit(params[0], context);
+        this.Visit(haystack, context);
         this.append(context, ') - 1');
         break;
 
       default:
         // MySQL, SQLite, Oracle
         this.append(context, 'INSTR(');
-        this.Visit(params[0], context);
+        this.Visit(haystack, context);
         this.append(context, ', ');
-        this.Visit(params[1], context);
+        this.Visit(needle, context);
         this.append(context, ') - 1');
         break;
     }
@@ -951,18 +968,22 @@ export class TypeOrmVisitor extends Visitor {
     const isMsSql = this.dialect === 'mssql';
     const sqlFunction = isMsSql ? 'SUBSTRING' : 'SUBSTR';
 
+    const value = argumentAt(params, 0, 'substring');
+    const start = argumentAt(params, 1, 'substring');
+    const length = params[2];
+
     this.append(context, `${sqlFunction}(`);
-    this.Visit(params[0], context);
+    this.Visit(value, context);
     this.append(context, ', ');
-    this.Visit(params[1], context);
+    this.Visit(start, context);
     this.append(context, ' + 1');
 
-    if (params[2]) {
+    if (length) {
       this.append(context, ', ');
-      this.Visit(params[2], context);
+      this.Visit(length, context);
     } else if (isMsSql) {
       this.append(context, ', LEN(');
-      this.Visit(params[0], context);
+      this.Visit(value, context);
       this.append(context, ')');
     }
 
@@ -976,20 +997,23 @@ export class TypeOrmVisitor extends Visitor {
    * трактует `||` как логическое ИЛИ, а MS SQL использует `+`, поэтому для них берётся `CONCAT`.
    */
   private visitConcat(params: Token[], context: Context) {
+    const left = argumentAt(params, 0, 'concat');
+    const right = argumentAt(params, 1, 'concat');
+
     if (this.dialect === 'mysql' || this.dialect === 'mssql') {
       this.append(context, 'CONCAT(');
-      this.Visit(params[0], context);
+      this.Visit(left, context);
       this.append(context, ', ');
-      this.Visit(params[1], context);
+      this.Visit(right, context);
       this.append(context, ')');
 
       return;
     }
 
     this.append(context, '(');
-    this.Visit(params[0], context);
+    this.Visit(left, context);
     this.append(context, ' || ');
-    this.Visit(params[1], context);
+    this.Visit(right, context);
     this.append(context, ')');
   }
 
@@ -1016,9 +1040,11 @@ export class TypeOrmVisitor extends Visitor {
       second: '%S',
     };
 
+    const value = argumentAt(params, 0, method);
+
     if (this.dialect === 'sqlite') {
       this.append(context, `CAST(strftime('${sqliteFormats[method]}', `);
-      this.Visit(params[0], context);
+      this.Visit(value, context);
       this.append(context, ') AS INTEGER)');
 
       return;
@@ -1026,14 +1052,14 @@ export class TypeOrmVisitor extends Visitor {
 
     if (this.dialect === 'mssql') {
       this.append(context, `DATEPART(${method}, `);
-      this.Visit(params[0], context);
+      this.Visit(value, context);
       this.append(context, ')');
 
       return;
     }
 
     this.append(context, `EXTRACT(${method.toUpperCase()} FROM `);
-    this.Visit(params[0], context);
+    this.Visit(value, context);
     this.append(context, ')');
   }
 
@@ -1052,7 +1078,7 @@ export class TypeOrmVisitor extends Visitor {
     }
 
     this.append(context, 'CAST(');
-    this.Visit(params[0], context);
+    this.Visit(argumentAt(params, 0, part), context);
     this.append(context, ` AS ${part.toUpperCase()})`);
   }
 
@@ -1064,14 +1090,18 @@ export class TypeOrmVisitor extends Visitor {
   private visitLikeExpression(
     params: Token[],
     context: Context,
-    buildPattern: (value: string) => string
+    buildPattern: (value: string) => string,
+    method: string
   ) {
-    this.Visit(params[0], context);
+    const column = argumentAt(params, 0, method);
+    const pattern = argumentAt(params, 1, method);
+
+    this.Visit(column, context);
 
     if (!this.options.useParameters) {
       // Режим без параметров: литерал инлайнится. SQLLiteral.convert возвращает строку
       // в одинарных кавычках — снимаем их, чтобы вставить шаблон с % внутрь кавычек.
-      const raw = String(SQLLiteral.convert(params[1].value, params[1].raw)).slice(1, -1);
+      const raw = String(SQLLiteral.convert(pattern.value, pattern.raw)).slice(1, -1);
 
       this.append(context, ` LIKE '${buildPattern(raw)}'`);
 
@@ -1079,7 +1109,7 @@ export class TypeOrmVisitor extends Visitor {
     }
 
     const name = `p${this.parameterSeed++}`;
-    const value = Literal.convert(params[1].value, params[1].raw);
+    const value = Literal.convert(pattern.value, pattern.raw);
 
     this.parameters.set(name, buildPattern(String(value)));
 

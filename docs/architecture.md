@@ -29,7 +29,7 @@ req.query  { $filter: "name eq 'Ann'", $top: '10', $search: 'x' }
     │
     ▼
 ┌──────────────────────┐
-│ parseQueryParams     │  $top/$skip → number, $count → boolean (по умолчанию true),
+│ parseQueryParams     │  $top/$skip → number, $count → boolean (по умолчанию false),
 │                      │  пустой $search → undefined
 └──────────┬───────────┘
            │  $search отделяется здесь и дальше по конвейеру не идёт

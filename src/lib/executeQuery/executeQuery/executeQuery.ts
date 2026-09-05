@@ -21,7 +21,7 @@ import type { ExecuteQueryOptions } from '../types';
  *   `allowedFields` / `allowedExpands`. Для ветки с `Repository` алиас практически обязателен:
  *   `createQueryBuilder(undefined)` даст безымянный алиас. Для `SelectQueryBuilder` можно
  *   не задавать — подставится `expressionMap.mainAlias`.
- * @returns массив сущностей либо `{ items, count }` при `$count` (по умолчанию включён).
+ * @returns массив сущностей; `{ items, count }` — только если передан `$count=true`.
  *
  * @example
  * // Репозиторий целиком

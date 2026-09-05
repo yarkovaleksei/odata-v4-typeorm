@@ -1,0 +1,1088 @@
+{
+  "info": {
+    "name": "odata-v4-typeorm-improved",
+    "description": "Запросы к демо-серверу из examples/server.\n\nЗапуск: `yarn server` в корне репозитория. Интерактивный конструктор тех же запросов — на http://localhost:3001/\n\nПапка «Ошибки» показывает, как библиотека отвергает неподдерживаемое: она никогда не выполняет запрос частично и не возвращает молча не те данные.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3001"
+    }
+  ],
+  "item": [
+    {
+      "name": "Основное",
+      "item": [
+        {
+          "name": "Все записи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": []
+            },
+            "description": "Ответ по умолчанию — массив: отсутствующий $count по OData v4 (раздел 11.2.5.5) означает false, и лишний COUNT(*) не выполняется."
+          },
+          "response": []
+        },
+        {
+          "name": "Схема сущности",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts/$metadata",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts",
+                "$metadata"
+              ],
+              "query": []
+            },
+            "description": "Поля и связи — их же подставляет конструктор в подсказки."
+          },
+          "response": []
+        },
+        {
+          "name": "Схема всех сущностей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/$metadata",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "$metadata"
+              ],
+              "query": []
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Со счётчиком",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$count=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$count",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Явный $count=true меняет форму ответа на объект { items, count }. count — общее число строк по фильтрам, без учёта $top и $skip."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$select и $expand",
+      "item": [
+        {
+          "name": "Выбор полей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$select=id,title",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,title"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$select=id,title&$expand=author,category",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,title"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author,category"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Вложенный $select",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$select=id,title&$expand=author($select=name)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,title"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author($select=name)"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Вложенный $orderby",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=posts($orderby=id desc)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "posts($orderby=id desc)"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Вложенная пагинация",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=posts($orderby=id desc;$top=1)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "posts($orderby=id desc;$top=1)"
+                }
+              ]
+            },
+            "description": "Срез связанных записей делается после запроса: LIMIT в запросе с LEFT JOIN действует на весь плоский результат, а не на группу."
+          },
+          "response": []
+        },
+        {
+          "name": "Двухуровневый $expand",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=posts($expand=comments)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "posts($expand=comments)"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Поле связи в $select",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$select=id,title,author/name&$expand=author",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,title,author/name"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$filter — сравнения и логика",
+      "item": [
+        {
+          "name": "Равенство",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=title eq 'Слои приложения'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "title eq 'Слои приложения'"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Неравенство и диапазон",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=id ge 2 and id le 4&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "id ge 2 and id le 4"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Логическое ИЛИ",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=id eq 1 or id eq 6&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "id eq 1 or id eq 6"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Скобки меняют приоритет",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=(id eq 1 or id eq 2) and id gt 1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "(id eq 1 or id eq 2) and id gt 1"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Отрицание",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=(not (id eq 1)) and id lt 4&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "(not (id eq 1)) and id lt 4"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Скобки вокруг not обязательны: парсер связывает его слабее, чем требует спецификация, и `not (X) and Y` прочитается как `not (X and Y)`."
+          },
+          "response": []
+        },
+        {
+          "name": "Сравнение с null",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/comments?$filter=comment eq null",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "comments"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "comment eq null"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Не null",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/comments?$filter=comment ne null",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "comments"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "comment ne null"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Фильтр по полю связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=author/name eq 'Ursula Manning'&$expand=author",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "author/name eq 'Ursula Manning'"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$filter — арифметика и функции",
+      "item": [
+        {
+          "name": "Арифметика",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=id mul 2 gt 6&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "id mul 2 gt 6"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Остаток от деления",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=id mod 2 eq 0&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "id mod 2 eq 0"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "contains",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=contains(title,'SQL')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "contains(title,'SQL')"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "startswith и length",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=startswith(name,'C') and length(name) gt 12",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "startswith(name,'C') and length(name) gt 12"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "tolower",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=tolower(name) eq 'carly butler'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "tolower(name) eq 'carly butler'"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "substring",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=substring(name,0,6) eq 'Ursula'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "substring(name,0,6) eq 'Ursula'"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "concat",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=concat(name,'!') eq 'Maggy Juarez!'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "concat(name,'!') eq 'Maggy Juarez!'"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "indexof",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=indexof(name,'Manning') gt 0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "indexof(name,'Manning') gt 0"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Сортировка и пагинация",
+      "item": [
+        {
+          "name": "Сортировка",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$orderby=title asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$orderby",
+                  "value": "title asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Сортировка по двум полям",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$orderby=author/name asc,id desc&$expand=author",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$orderby",
+                  "value": "author/name asc,id desc"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Страница",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$orderby=id asc&$top=2&$skip=2",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                },
+                {
+                  "key": "$top",
+                  "value": "2"
+                },
+                {
+                  "key": "$skip",
+                  "value": "2"
+                }
+              ]
+            },
+            "description": "Смещение и размер страницы. Ответ — массив; чтобы вместе со страницей получить общее число строк, добавьте $count=true."
+          },
+          "response": []
+        },
+        {
+          "name": "Пустая страница со счётчиком",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$top=0&$count=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "0"
+                },
+                {
+                  "key": "$count",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "$top=0 — корректный запрос пустой страницы (OData v4, раздел 11.2.6.4). Вместе с $count=true это способ узнать число строк, не вытягивая их: { items: [], count: N }."
+          },
+          "response": []
+        },
+        {
+          "name": "Усечение до maxTop",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$top=500",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Демо-сервер задаёт maxTop=100, и запрос сверх лимита молча усекается."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$search",
+      "item": [
+        {
+          "name": "Поиск по подстроке",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$search=SQL",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "SQL"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Регистронезависимость",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$search=typescript",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "typescript"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Поиск по числу",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$search=3",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "3"
+                }
+              ]
+            },
+            "description": "Числовые колонки сравниваются на точное равенство, текстовые — по подстроке."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Ошибки",
+      "item": [
+        {
+          "name": "Лямбда any — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=posts/any(p: p/id eq 1)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "posts/any(p: p/id eq 1)"
+                }
+              ]
+            },
+            "description": "Парсер теряет тело лямбды, поэтому выполнить такой фильтр нельзя. Библиотека отвергает запрос, а не выполняет его без условия."
+          },
+          "response": []
+        },
+        {
+          "name": "Оператор in — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=id in (1,2)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "id in (1,2)"
+                }
+              ]
+            },
+            "description": "Не разбирается парсером. Обходной путь: id eq 1 or id eq 2."
+          },
+          "response": []
+        },
+        {
+          "name": "Несуществующее поле — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=nonexistent eq 1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "nonexistent eq 1"
+                }
+              ]
+            },
+            "description": "Имена полей по метаданным не проверяются, ошибку возвращает СУБД."
+          },
+          "response": []
+        },
+        {
+          "name": "Отрицательный $top — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$top=-5",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "-5"
+                }
+              ]
+            },
+            "description": "Раньше take(-5) молча игнорировался и возвращалась вся таблица."
+          },
+          "response": []
+        },
+        {
+          "name": "Некорректный синтаксис — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/posts?$filter=!!!",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "posts"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "!!!"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

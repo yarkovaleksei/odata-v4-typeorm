@@ -113,7 +113,7 @@ describe('TypeOrmVisitor', () => {
       visitor.Visit(ast);
 
       expect(visitor.includes.length).toBe(1);
-      expect(visitor.includes[0].navigationProperty).toBe('Profile');
+      expect(visitor.includes[0]!.navigationProperty).toBe('Profile');
     });
 
     it('должен обработать вложенный expand', () => {
@@ -124,11 +124,11 @@ describe('TypeOrmVisitor', () => {
 
       expect(visitor.includes.length).toBe(1);
 
-      const profileVisitor = visitor.includes[0];
+      const profileVisitor = visitor.includes[0]!;
 
       expect(profileVisitor.navigationProperty).toBe('profile');
       expect(profileVisitor.includes.length).toBe(1);
-      expect(profileVisitor.includes[0].navigationProperty).toBe('avatar');
+      expect(profileVisitor.includes[0]!.navigationProperty).toBe('avatar');
     });
   });
 
@@ -482,7 +482,7 @@ describe('TypeOrmVisitor', () => {
 
       expect(visitor.includes.length).toBe(1);
 
-      const profileVisitor = visitor.includes[0];
+      const profileVisitor = visitor.includes[0]!;
 
       expect(profileVisitor.navigationProperty).toBe('Profile');
 
@@ -498,7 +498,7 @@ describe('TypeOrmVisitor', () => {
 
       expect(visitor.includes.length).toBe(1);
 
-      const profileVisitor = visitor.includes[0];
+      const profileVisitor = visitor.includes[0]!;
 
       expect(profileVisitor.navigationProperty).toBe('Profile');
       expect(profileVisitor.where).toBe('1 = 1');
