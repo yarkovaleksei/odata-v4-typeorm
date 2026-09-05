@@ -205,6 +205,8 @@ describe('$filter — функции даты и времени', () => {
       query: { $filter: 'registeredAt lt 2021-01-01T00:00:00Z' },
       expected: [1],
     },
+    { name: 'date выделяет календарную дату', query: { $filter: 'date(registeredAt) eq 2020-01-15' }, expected: [1] },
+    { name: 'time выделяет время суток', query: { $filter: 'time(registeredAt) eq 08:00:00' }, expected: [2] },
   ];
 
   runMatrix(authorIds, cases);

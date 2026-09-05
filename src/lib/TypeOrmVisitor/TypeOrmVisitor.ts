@@ -758,7 +758,7 @@ export class TypeOrmVisitor extends Visitor {
 
     if (this.options.useParameters) {
       const name = `p${this.parameterSeed++}`;
-      const value = Literal.convert(node.value, node.raw);
+      const value = this.convertLiteral(node);
 
       context.literal = value;
 
@@ -774,6 +774,24 @@ export class TypeOrmVisitor extends Visitor {
     context.literal = SQLLiteral.convert(node.value, node.raw);
 
     this.append(context, String(context.literal));
+  }
+
+  /**
+   * Приводит литерал OData к значению, пригодному для привязки параметра.
+   *
+   * В основном работу делает `Literal.convert` из `odata-v4-literal`, но для `Edm.TimeOfDay`
+   * он возвращает полный момент времени (`08:00:00` → `1970-01-01T08:00:00.000Z`).
+   * Сравнивать такое с результатом `TIME(x)` бессмысленно: и MySQL, и SQLite, и PostgreSQL
+   * отдают оттуда `HH:MM:SS`, поэтому время суток привязывается исходной строкой.
+   *
+   * `Edm.Date` трогать не нужно — он и так конвертируется в `'2020-01-15'`.
+   */
+  private convertLiteral(node: Token): unknown {
+    if (node.value === 'Edm.TimeOfDay') {
+      return node.raw;
+    }
+
+    return Literal.convert(node.value, node.raw);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -856,6 +874,14 @@ export class TypeOrmVisitor extends Visitor {
       case 'minute':
       case 'second':
         this.visitDatePart(method, params, context);
+        break;
+
+      case 'date':
+        this.visitDateTimeCast('date', params, context);
+        break;
+
+      case 'time':
+        this.visitDateTimeCast('time', params, context);
         break;
 
       case 'now':
@@ -1009,6 +1035,25 @@ export class TypeOrmVisitor extends Visitor {
     this.append(context, `EXTRACT(${method.toUpperCase()} FROM `);
     this.Visit(params[0], context);
     this.append(context, ')');
+  }
+
+  /**
+   * Выделение календарной даты или времени суток: `date(x)`, `time(x)`.
+   *
+   * MySQL и SQLite имеют одноимённые функции; PostgreSQL и MS SQL приводят типом.
+   * ANSI-форма `CAST(x AS DATE)` взята запасной — она же работает в PostgreSQL,
+   * MS SQL и Oracle.
+   */
+  private visitDateTimeCast(part: 'date' | 'time', params: Token[], context: Context) {
+    if (this.dialect === 'mysql' || this.dialect === 'sqlite') {
+      this.visitSimpleFunction(part.toUpperCase(), params, context);
+
+      return;
+    }
+
+    this.append(context, 'CAST(');
+    this.Visit(params[0], context);
+    this.append(context, ` AS ${part.toUpperCase()})`);
   }
 
   /**

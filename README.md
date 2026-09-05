@@ -111,14 +111,15 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc"
 арифметика (`add`, `sub`, `mul`, `div`, `mod`, унарный минус), `null` → `IS NULL`,
 пути по связям (`author/name`) и функции: `contains`, `startswith`, `endswith`, `tolower`,
 `toupper`, `trim`, `length`, `indexof`, `substring`, `concat`, `round`, `floor`, `ceiling`,
-`year` / `month` / `day` / `hour` / `minute` / `second`, `now`.
+`year` / `month` / `day` / `hour` / `minute` / `second`, `date`, `time`, `now`.
 
 SQL для функций подбирается под вашу СУБД автоматически (`LENGTH` против `LEN`,
 `EXTRACT` против `strftime` и т.д.) — диалект берётся из подключения TypeORM.
 
-**Не поддерживаются:** `in`, лямбды `any` / `all`, `replace`, `cast`, геопространственные
-функции, `$apply`, `$compute`, `$levels`, `$skiptoken`. Такой запрос не выполняется молча —
-он отвергается с `ODataUnsupportedError`.
+**Не поддерживаются:** `in`, лямбды `any` / `all`, `replace`, `cast`, `isof`,
+`mindatetime` / `maxdatetime`, `totalseconds`, геопространственные функции, `$apply`,
+`$compute`, `$levels`, `$skiptoken`. Такой запрос не выполняется молча — он отвергается
+с `ODataUnsupportedError`.
 
 Полная матрица с проверенным поведением каждого оператора и каждой функции, включая таблицу
 генерируемого SQL по диалектам: **[docs/odata-support.md](./docs/odata-support.md)**.

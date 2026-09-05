@@ -305,6 +305,46 @@ describe('TypeOrmVisitor', () => {
       expect(sql).toContain(expected);
     });
 
+    it.each([
+      ['ansi', 'CAST(u.createdAt AS DATE)'],
+      ['postgres', 'CAST(u.createdAt AS DATE)'],
+      ['mssql', 'CAST(u.createdAt AS DATE)'],
+      ['mysql', 'DATE(u.createdAt)'],
+      ['sqlite', 'DATE(u.createdAt)'],
+    ])('date в диалекте %s', (dialect, expected) => {
+      const { sql } = processQuery('$filter=date(createdAt) eq 2020-01-15', { dialect });
+
+      expect(sql).toContain(expected);
+    });
+
+    it.each([
+      ['ansi', 'CAST(u.createdAt AS TIME)'],
+      ['mysql', 'TIME(u.createdAt)'],
+      ['sqlite', 'TIME(u.createdAt)'],
+    ])('time в диалекте %s', (dialect, expected) => {
+      const { sql } = processQuery('$filter=time(createdAt) eq 08:00:00', { dialect });
+
+      expect(sql).toContain(expected);
+    });
+
+    /**
+     * `Literal.convert` превращает `Edm.TimeOfDay` в полный момент времени
+     * (`08:00:00` → `1970-01-01T08:00:00.000Z`), а `TIME(x)` во всех трёх СУБД отдаёт
+     * `HH:MM:SS`. Сравнение таких значений никогда не сходилось, поэтому время суток
+     * привязывается исходной строкой.
+     */
+    it('литерал времени суток привязывается строкой HH:MM:SS', () => {
+      const { parameters } = processQuery('$filter=time(createdAt) eq 08:00:00');
+
+      expect(parameters.get('p0')).toBe('08:00:00');
+    });
+
+    it('литерал даты остаётся строкой YYYY-MM-DD', () => {
+      const { parameters } = processQuery('$filter=date(createdAt) eq 2020-01-15');
+
+      expect(parameters.get('p0')).toBe('2020-01-15');
+    });
+
     it('substring в MS SQL получает обязательный третий аргумент', () => {
       const { sql } = processQuery("$filter=substring(name, 1) eq 'ohn'", { dialect: 'mssql' });
 

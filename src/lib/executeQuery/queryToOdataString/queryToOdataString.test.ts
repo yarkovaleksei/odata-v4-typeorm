@@ -138,3 +138,35 @@ describe('queryToOdataString', () => {
     expect(result).toBe('$orderby=name&$search=test&$top=10');
   });
 });
+
+/**
+ * Символы, которые `encodeURI` не трогает, хотя парсер OData придаёт им значение.
+ *
+ * `#` и `?` внутри строкового литерала обрывали разбор: `$filter=name eq 'A#B'`
+ * отвечал `Unexpected character`. Остальные из проверенных парсер принимает как есть,
+ * и лишнее экранирование только мешало бы читаемости строки.
+ */
+describe('queryToOdataString — спецсимволы в значении', () => {
+  it.each([
+    ['#', '%23'],
+    ['?', '%3F'],
+  ])('символ %s экранируется', (character, encoded) => {
+    const result = queryToOdataString({ $filter: `name eq 'A${character}B'` });
+
+    expect(result).toContain(encoded);
+    expect(result).not.toContain(character);
+  });
+
+  it.each([['&'], ['+'], ['='], ['%']])('символ %s остаётся как есть', (character) => {
+    const result = queryToOdataString({ $filter: `name eq 'A${character}B'` });
+
+    expect(result).toContain(character);
+  });
+
+  it('грамматика OData не экранируется', () => {
+    const result = queryToOdataString({ $expand: 'books($select=id,title)' });
+
+    // Если бы применялся encodeURIComponent, здесь было бы %24, %28 и %2C
+    expect(result).toBe('$expand=books($select=id,title)');
+  });
+});

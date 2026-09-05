@@ -142,11 +142,15 @@ SQL подбирается под конкретную СУБД: `executeQuery` 
 | `year/month/day(f)` | `EXTRACT(YEAR FROM f)` | ← | `CAST(strftime('%Y',f) AS INTEGER)` | `DATEPART(year,f)` | ✅ |
 | `hour/minute/second(f)` | `EXTRACT(HOUR FROM f)` | ← | `CAST(strftime('%H',f) AS INTEGER)` | `DATEPART(hour,f)` | ✅ |
 | `now()` | `CURRENT_TIMESTAMP` | ← | ← | ← | ✅ |
+| `date(f)` | `CAST(f AS DATE)` | `DATE(f)` | `DATE(f)` | `CAST(f AS DATE)` | ✅ |
+| `time(f)` | `CAST(f AS TIME)` | `TIME(f)` | `TIME(f)` | `CAST(f AS TIME)` | ✅ |
 | `replace` | — | — | — | — | ❌ парсер не разбирает |
 | `cast` | — | — | — | — | ❌ парсер не разбирает |
-| `date`, `time` | — | — | — | — | ❌ нет трансляции |
-| `totalseconds`, `fractionalseconds` | — | — | — | — | ❌ нет трансляции |
-| `isof` | — | — | — | — | ❌ нет трансляции |
+| `fractionalseconds` | — | — | — | — | ❌ нет трансляции |
+| `totaloffsetminutes` | — | — | — | — | ❌ колонки объявлены без часового пояса |
+| `totalseconds` | — | — | — | — | ❌ нет модели типа `Edm.Duration` |
+| `mindatetime`, `maxdatetime` | — | — | — | — | ❌ границы диапазона у СУБД разные |
+| `isof` | — | — | — | — | ❌ нет модели типов EDM |
 | геопространственные | — | — | — | — | ❌ нет трансляции |
 
 `←` означает «так же, как в предыдущем столбце».
@@ -311,6 +315,13 @@ yarn db:down
 и связей выключены по умолчанию — на публичном API их нужно задать.
 
 **Не работает и отвергается с ошибкой:** `in`, `any` / `all`, `replace`, `cast`, `isof`,
+`fractionalseconds`, `totalseconds`, `totaloffsetminutes`, `mindatetime`, `maxdatetime`,
 геопространственные функции, `$apply`, `$compute`, `$levels`, `$skiptoken`.
+
+Последние пять парсер разбирает, но осмысленной трансляции у них нет: `totalseconds` требует
+типа `Edm.Duration`, `totaloffsetminutes` — колонки с часовым поясом, `mindatetime` /
+`maxdatetime` упираются в разные границы диапазона дат у СУБД (MySQL `DATETIME` начинается
+с 1000 года, PostgreSQL — с 4713 до н.э.). Подставлять приближение вместо них не стали:
+тихое расхождение со спецификацией опаснее явного отказа.
 
 Планы по закрытию пробелов — в [roadmap.md](./roadmap.md).
