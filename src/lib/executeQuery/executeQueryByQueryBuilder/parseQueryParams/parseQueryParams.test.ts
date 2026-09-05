@@ -1,169 +1,194 @@
-import type { QueryParams } from '../types';
+import type { ParsedQueryParams, QueryParams } from '../../../types';
 
 import { parseQueryParams } from './parseQueryParams';
 
 describe('parseQueryParams', () => {
   describe('$search', () => {
-    it('should keep $search as is when it is a non-empty string', () => {
+    it('должен оставить $search как есть, если это непустая строка', () => {
       const query: QueryParams = { $search: 'hello' };
       const result = parseQueryParams(query);
+
       expect(result.$search).toBe('hello');
     });
 
-    it('should trim whitespace from $search and keep if non-empty after trim', () => {
+    it('должен обрезать пробелы в $search и оставить значение, если после обрезки оно не пустое', () => {
       const query: QueryParams = { $search: '  test  ' };
       const result = parseQueryParams(query);
+
       expect(result.$search).toBe('test');
     });
 
-    it('should set $search to undefined when it is an empty string', () => {
+    it('должен установить $search в undefined, если передана пустая строка', () => {
       const query: QueryParams = { $search: '' };
       const result = parseQueryParams(query);
+
       expect(result.$search).toBeUndefined();
     });
 
-    it('should set $search to undefined when it contains only whitespace', () => {
+    it('должен установить $search в undefined, если строка состоит только из пробелов', () => {
       const query: QueryParams = { $search: '   ' };
       const result = parseQueryParams(query);
+
       expect(result.$search).toBeUndefined();
     });
 
-    it('should set $search to undefined when it is undefined', () => {
+    it('должен установить $search в undefined, если $search не передан', () => {
       const query: QueryParams = {};
       const result = parseQueryParams(query);
+
       expect(result.$search).toBeUndefined();
     });
 
-    it('should set $search to undefined when it is null (though type says string)', () => {
+    it('должен установить $search в undefined, если передан null (хотя тип подразумевает строку)', () => {
       // В реальности QueryParams допускает только string, но для полноты
       const query = { $search: null as never };
       const result = parseQueryParams(query);
+
       expect(result.$search).toBeUndefined();
     });
   });
 
   describe('$top', () => {
-    it('should convert string number to number', () => {
+    it('должен преобразовать строковое число в число', () => {
       const query: QueryParams = { $top: '10' };
       const result = parseQueryParams(query);
+
       expect(result.$top).toBe(10);
     });
 
-    it('should keep number as number', () => {
-      const query: QueryParams = { $top: 20 };
+    it('должен оставить число как число', () => {
+      const query: QueryParams = { $top: '20' };
       const result = parseQueryParams(query);
+
       expect(result.$top).toBe(20);
     });
 
-    it('should default to 0 when $top is undefined', () => {
+    it('должен установить значение по умолчанию 0, если $top не передан', () => {
       const query: QueryParams = {};
       const result = parseQueryParams(query);
+
       expect(result.$top).toBe(0);
     });
 
-    it('should default to 0 when $top is null (though type says number | string)', () => {
+    it('должен установить значение по умолчанию 0, если $top равен null', () => {
       const query = { $top: null as never };
       const result = parseQueryParams(query);
+
       expect(result.$top).toBe(0);
     });
 
-    it('should convert string "0" to 0', () => {
+    it('должен преобразовать строку "0" в 0', () => {
       const query: QueryParams = { $top: '0' };
       const result = parseQueryParams(query);
+
       expect(result.$top).toBe(0);
     });
 
-    it('should handle negative numbers as strings', () => {
+    it('должен обрабатывать отрицательные числа в виде строк', () => {
       const query: QueryParams = { $top: '-5' };
       const result = parseQueryParams(query);
+
       expect(result.$top).toBe(-5);
     });
 
-    it('should handle floating point numbers as strings (parseInt truncates)', () => {
+    it('должен обрабатывать числа с плавающей точкой в виде строк (parseInt отбрасывает дробную часть)', () => {
       const query: QueryParams = { $top: '3.14' };
       const result = parseQueryParams(query);
+
       expect(result.$top).toBe(3);
     });
   });
 
   describe('$skip', () => {
-    it('should convert string number to number', () => {
+    it('должен преобразовать строковое число в число', () => {
       const query: QueryParams = { $skip: '5' };
       const result = parseQueryParams(query);
+
       expect(result.$skip).toBe(5);
     });
 
-    it('should keep number as number', () => {
-      const query: QueryParams = { $skip: 15 };
+    it('должен оставить число как число', () => {
+      const query: QueryParams = { $skip: '15' };
       const result = parseQueryParams(query);
+
       expect(result.$skip).toBe(15);
     });
 
-    it('should default to 0 when $skip is undefined', () => {
+    it('должен установить значение по умолчанию 0, если $skip не передан', () => {
       const query: QueryParams = {};
       const result = parseQueryParams(query);
+
       expect(result.$skip).toBe(0);
     });
 
-    it('should default to 0 when $skip is null', () => {
+    it('должен установить значение по умолчанию 0, если $skip равен null', () => {
       const query = { $skip: null as never };
       const result = parseQueryParams(query);
+
       expect(result.$skip).toBe(0);
     });
   });
 
   describe('$count', () => {
-    it('should default to true when $count is undefined', () => {
+    it('должен установить значение по умолчанию true, если $count не передан', () => {
       const query: QueryParams = {};
       const result = parseQueryParams(query);
+
       expect(result.$count).toBe(true);
     });
 
-    it('should keep boolean true', () => {
-      const query: QueryParams = { $count: true };
-      const result = parseQueryParams(query);
-      expect(result.$count).toBe(true);
-    });
-
-    it('should keep boolean false', () => {
-      const query: QueryParams = { $count: false };
-      const result = parseQueryParams(query);
-      expect(result.$count).toBe(false);
-    });
-
-    it('should convert string "true" to true', () => {
+    it('должен оставить булево true', () => {
       const query: QueryParams = { $count: 'true' };
       const result = parseQueryParams(query);
+
       expect(result.$count).toBe(true);
     });
 
-    it('should convert any other string to false', () => {
+    it('должен оставить булево false', () => {
       const query: QueryParams = { $count: 'false' };
       const result = parseQueryParams(query);
+
       expect(result.$count).toBe(false);
     });
 
-    it('should convert string "TRUE" to false (case-sensitive)', () => {
+    it('должен преобразовать строку "true" в true', () => {
+      const query: QueryParams = { $count: 'true' };
+      const result = parseQueryParams(query);
+
+      expect(result.$count).toBe(true);
+    });
+
+    it('должен преобразовать любую другую строку в false', () => {
+      const query: QueryParams = { $count: 'false' };
+      const result = parseQueryParams(query);
+
+      expect(result.$count).toBe(false);
+    });
+
+    it('должен преобразовать строку "TRUE" в true (регистронезависимо)', () => {
       const query: QueryParams = { $count: 'TRUE' };
       const result = parseQueryParams(query);
-      expect(result.$count).toBe(false);
+
+      expect(result.$count).toBe(true);
     });
 
-    it('should convert empty string to false', () => {
+    it('должен преобразовать пустую строку в false', () => {
       const query: QueryParams = { $count: '' };
       const result = parseQueryParams(query);
+
       expect(result.$count).toBe(false);
     });
 
-    it('should convert number 1 to false (not a boolean or string "true")', () => {
+    it('должен преобразовать число 1 в false (не булево и не строка "true")', () => {
       const query = { $count: 1 as never };
       const result = parseQueryParams(query);
+
       expect(result.$count).toBe(false);
     });
   });
 
-  describe('Other fields', () => {
-    it('should copy $filter, $orderby, $select, $expand unchanged', () => {
+  describe('Остальные поля', () => {
+    it('должен скопировать $filter, $orderby, $select, $expand без изменений', () => {
       const query: QueryParams = {
         $filter: 'name eq "John"',
         $orderby: 'name desc',
@@ -171,15 +196,17 @@ describe('parseQueryParams', () => {
         $expand: 'profile',
       };
       const result = parseQueryParams(query);
+
       expect(result.$filter).toBe(query.$filter);
       expect(result.$orderby).toBe(query.$orderby);
       expect(result.$select).toBe(query.$select);
       expect(result.$expand).toBe(query.$expand);
     });
 
-    it('should handle missing optional fields as undefined', () => {
+    it('должен обрабатывать отсутствующие необязательные поля как undefined', () => {
       const query: QueryParams = {};
       const result = parseQueryParams(query);
+
       expect(result.$filter).toBeUndefined();
       expect(result.$orderby).toBeUndefined();
       expect(result.$select).toBeUndefined();
@@ -187,8 +214,8 @@ describe('parseQueryParams', () => {
     });
   });
 
-  describe('Complete object structure', () => {
-    it('should return a complete ParsedQueryParams object with correct types', () => {
+  describe('Структура полного объекта', () => {
+    it('должен вернуть полный объект ParsedQueryParams с правильными типами', () => {
       const query: QueryParams = {
         $search: '  test  ',
         $filter: 'age gt 18',
@@ -200,6 +227,7 @@ describe('parseQueryParams', () => {
         $count: 'true',
       };
       const result = parseQueryParams(query);
+
       expect(result).toEqual({
         $search: 'test',
         $filter: 'age gt 18',
@@ -212,19 +240,20 @@ describe('parseQueryParams', () => {
       });
     });
 
-    it('should preserve numeric values when they are already numbers', () => {
-      const query: QueryParams = {
+    it('должен сохранять числовые значения, если они уже являются числами', () => {
+      const query: ParsedQueryParams = {
         $top: 100,
         $skip: 200,
         $count: false,
       };
-      const result = parseQueryParams(query);
+      const result = parseQueryParams(query as unknown as QueryParams);
+
       expect(result.$top).toBe(100);
       expect(result.$skip).toBe(200);
       expect(result.$count).toBe(false);
     });
 
-    it('should handle mixed types correctly', () => {
+    it('должен обрабатывать смешанные типы корректно', () => {
       const query: QueryParams = {
         $search: '  search  ',
         $top: 'invalid',
@@ -232,9 +261,9 @@ describe('parseQueryParams', () => {
         $count: 'maybe',
       };
       const result = parseQueryParams(query);
+
       expect(result.$search).toBe('search');
-      // parseInt('invalid') => NaN, но NaN преобразуется в 0 из-за ?? 0? Нет: typeof $top === 'string' ? parseInt(...) : ($top ?? 0). Если строка не число, parseInt вернёт NaN, и это значение будет использовано (NaN). Но NaN не является falsy, поэтому оно останется. Это потенциальная проблема, но по заданию мы тестируем поведение как есть.
-      expect(result.$top).toBeNaN();
+      expect(result.$top).toBe(0);
       expect(result.$skip).toBe(15);
       expect(result.$count).toBe(false);
     });

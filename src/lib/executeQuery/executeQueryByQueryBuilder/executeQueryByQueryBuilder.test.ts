@@ -43,8 +43,8 @@ describe('executeQueryByQueryBuilder', () => {
   it('должен выполнить запрос без параметров, используя алиас из mainAlias', async () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
-      $top: 0,
-      $skip: 0,
+      $top: '0',
+      $skip: '0',
     });
 
     expect(mockQueryBuilder.select).toHaveBeenCalledWith(['defaultAlias.id', 'defaultAlias.name']);
@@ -59,9 +59,9 @@ describe('executeQueryByQueryBuilder', () => {
   it('должен использовать явный select из odataQuery, если он указан', async () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
-      $top: 0,
-      $skip: 0,
-      $count: false,
+      $top: '0',
+      $skip: '0',
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.select).toHaveBeenCalledWith(['defaultAlias.id', 'defaultAlias.name']);
@@ -71,9 +71,9 @@ describe('executeQueryByQueryBuilder', () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
       $filter: "name eq '@name'",
-      $top: 0,
-      $skip: 0,
-      $count: false,
+      $top: '0',
+      $skip: '0',
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('defaultAlias.name = :p0');
@@ -84,9 +84,9 @@ describe('executeQueryByQueryBuilder', () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
       $orderby: 'name asc,created desc',
-      $top: 0,
-      $skip: 0,
-      $count: false,
+      $top: '0',
+      $skip: '0',
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledTimes(2);
@@ -98,9 +98,9 @@ describe('executeQueryByQueryBuilder', () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
       $orderby: '1',
-      $top: 0,
-      $skip: 0,
-      $count: false,
+      $top: '0',
+      $skip: '0',
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledTimes(1);
@@ -110,9 +110,9 @@ describe('executeQueryByQueryBuilder', () => {
   it('должен обработать поиск ($search) через processSearch', async () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: 'test',
-      $top: 0,
-      $skip: 0,
-      $count: false,
+      $top: '0',
+      $skip: '0',
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.andWhere).toHaveBeenCalledTimes(2);
@@ -128,7 +128,7 @@ describe('executeQueryByQueryBuilder', () => {
       $search: undefined,
       $top: '20',
       $skip: '10',
-      $count: false,
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.skip).toHaveBeenCalledWith(10);
@@ -140,9 +140,9 @@ describe('executeQueryByQueryBuilder', () => {
 
     const result = await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
-      $top: 0,
-      $skip: 0,
-      $count: true,
+      $top: '0',
+      $skip: '0',
+      $count: 'true',
     });
 
     expect(mockQueryBuilder.getManyAndCount).toHaveBeenCalled();
@@ -155,9 +155,9 @@ describe('executeQueryByQueryBuilder', () => {
 
     const result = await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
-      $top: 0,
-      $skip: 0,
-      $count: false,
+      $top: '0',
+      $skip: '0',
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.getMany).toHaveBeenCalled();
@@ -169,9 +169,9 @@ describe('executeQueryByQueryBuilder', () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
       $filter: 'id gt 5',
-      $top: 0,
-      $skip: 0,
-      $count: false,
+      $top: '0',
+      $skip: '0',
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.select).toHaveBeenCalledWith(['defaultAlias.id', 'defaultAlias.name']);
@@ -186,9 +186,9 @@ describe('executeQueryByQueryBuilder', () => {
 
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
-      $top: 0,
-      $skip: 0,
-      $count: false,
+      $top: '0',
+      $skip: '0',
+      $count: 'false',
     });
 
     expect(mockQueryBuilder.select).toHaveBeenCalledWith(['main.id', 'main.name']);
@@ -204,9 +204,9 @@ describe('executeQueryByQueryBuilder', () => {
       mockQueryBuilder,
       {
         $search: undefined,
-        $top: 0,
-        $skip: 0,
-        $count: false,
+        $top: '0',
+        $skip: '0',
+        $count: 'false',
       },
       { alias: 'optionsAlias' }
     );

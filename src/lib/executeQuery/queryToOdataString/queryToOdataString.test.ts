@@ -30,9 +30,9 @@ describe('queryToOdataString', () => {
     const query: QueryParams = {
       $search: 'hello',
       $filter: 'name eq "John"',
-      $top: 10,
-      $skip: 5,
-      $count: true,
+      $top: '10',
+      $skip: '5',
+      $count: 'true',
     };
     const result = queryToOdataString(query);
 
@@ -50,7 +50,7 @@ describe('queryToOdataString', () => {
       // @ts-ignore
       $filter: null,
       $orderby: undefined,
-      $top: 0,
+      $top: '0',
     };
     const result = queryToOdataString(query);
 
@@ -72,9 +72,9 @@ describe('queryToOdataString', () => {
 
   it('должен преобразовывать числовые и булевы значения в строки', () => {
     const query: QueryParams = {
-      $top: 5,
-      $skip: 0,
-      $count: false,
+      $top: '5',
+      $skip: '0',
+      $count: 'false',
     };
     const result = queryToOdataString(query);
 
@@ -102,9 +102,9 @@ describe('queryToOdataString', () => {
 
   it('не должен включать параметры, где ключ начинается с "$", но значение ложное (кроме 0, false, пустой строки)', () => {
     const query: QueryParams = {
-      $top: 0,
+      $top: '0',
       $skip: '',
-      $count: false,
+      $count: 'false',
       // @ts-ignore
       $filter: null,
     };
@@ -131,7 +131,7 @@ describe('queryToOdataString', () => {
     const query: QueryParams = {
       $orderby: 'name',
       $search: 'test',
-      $top: 10,
+      $top: '10',
     };
     const result = queryToOdataString(query);
 

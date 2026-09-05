@@ -1,3 +1,10 @@
+/**
+ * Превращает дерево `TypeOrmVisitor.includes` (результат разбора `$expand`) в цепочку вызовов
+ * `leftJoin` / `leftJoinAndSelect`, `addSelect`, `addOrderBy` на переданном `SelectQueryBuilder`.
+ *
+ * Для вложенных expand выполняется рекурсия: ищется метаданные связи по `propertyPath`, затем
+ * `processIncludes` вызывается для целевой сущности с алиасом дочернего посетителя.
+ */
 import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 
 import type { TypeOrmVisitor } from '../../TypeOrmVisitor';

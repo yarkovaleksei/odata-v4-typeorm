@@ -24,7 +24,9 @@ yarn serve
 
 ## Usage as server - TypeScript
 
-Example request:  GET [/api/users?$search=user&$select=id,username](http://localhost:3001/api/users?$search=user&$select=id,username)
+Example request:
+- GET [/api/users/$metadata](http://localhost:3001/api/users/$metadata)
+- GET [/api/users?$search=user&$select=id,username](http://localhost:3001/api/users?$search=user&$select=id,username)
 
 ## NestJS middleware
 
@@ -33,7 +35,7 @@ Example request:  GET [/api/users?$search=user&$select=id,username](http://local
 ```typescript
 import { Inject, Injectable, NestMiddleware } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { odataQuery } from 'odata-v4-typeorm-improved';
+import { ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
 import { Repository } from 'typeorm';
 
 import { UserEntity } from '../entities/user.entity';
@@ -45,7 +47,7 @@ export class OdataUsersMiddleware implements NestMiddleware {
   ) {}
 
   use(req: Request, res: Response, next: Function) {
-    odataQuery(this.usersRepository)(req, res, next);
+    ODataQueryMiddleware(this.usersRepository)(req, res, next);
   }
 }
 ```
@@ -114,11 +116,11 @@ export class AppModule implements NestModule {
 }
 ```
 
-## odataQuery
+## ODataQueryMiddleware
 
 ```typescript
 import express from 'express';
-import { odataQuery } from 'odata-v4-typeorm-improved';
+import { ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
 import { getRepository } from 'typeorm';
 
 import { User } from '../entities/user';
@@ -126,7 +128,7 @@ import { User } from '../entities/user';
 const app = express();
 const usersRepository = getRepository(User);
 
-app.get('/api/users', odataQuery(usersRepository));
+app.get('/api/users', ODataQueryMiddleware(usersRepository));
 
 const port = 3001;
 app.listen(port, () => console.log(`Example app listening on port ${port}!`));

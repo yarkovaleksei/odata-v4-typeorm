@@ -1,9 +1,9 @@
 import type { Repository } from 'typeorm';
 
-import { User } from '../../test/entity/User.entity';
-import { dataSource } from '../../test/setup/dataSource';
+import { User } from '../../../test/entity/User.entity';
+import { dataSource } from '../../../test/setup/dataSource';
+import type { GetManyResponse } from '../types';
 import { executeQuery } from './executeQuery';
-import type { GetManyResponse } from './types';
 
 describe('executeQuery', () => {
   const alias = 'user';

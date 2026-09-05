@@ -1,4 +1,7 @@
-import type { QueryParams } from '../../types';
+/**
+ * @file Сериализация объекта параметров обратно в формат, ожидаемый `odata-v4-parser.query`.
+ */
+import type { ParsedQueryParams, QueryParams } from '../../types';
 
 /**
  * Преобразует объект параметров запроса в OData-строку.
@@ -17,7 +20,7 @@ import type { QueryParams } from '../../types';
  * @param query - объект с параметрами запроса (например, `{ $search: 'hello', $top: 5 }`)
  * @returns строка вида `$search=hello&$top=5` или пустая строка, если подходящих параметров нет
  */
-export const queryToOdataString = (query: QueryParams): string => {
+export const queryToOdataString = (query: ParsedQueryParams | QueryParams): string => {
   // Преобразуем объект в массив пар [ключ, значение]
   return (
     Object.entries(query)

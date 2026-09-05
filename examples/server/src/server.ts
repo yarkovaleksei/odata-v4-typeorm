@@ -1,6 +1,6 @@
 import express from 'express';
-import { odataQuery } from '../../../src/lib';
-import { getConnection, getRepository } from 'typeorm';
+import { ODataQueryMiddleware } from '../../../src/lib';
+import { getConnection, getRepository, type EntityTarget, type ObjectLiteral } from 'typeorm';
 
 import { Author } from './entities/author';
 import { Post } from './entities/post';
@@ -14,13 +14,28 @@ import * as ormconfig from './ormconfig.json';
 import { User } from './entities/user';
 import { PostComment } from './entities/postComment';
 
+function getMetadata(entity: EntityTarget<ObjectLiteral>) {
+  const metadata = getConnection()
+    .getMetadata(entity)
+    .ownColumns.map((column) => {
+      return {
+        name: column.propertyName,
+        type: typeof column.type === 'function' ? column.type.name : column.type,
+        default: column.default,
+        isNullable: column.isNullable,
+      };
+    });
+
+  return metadata;
+}
+
 export default (async () => {
   try {
     const dbConfig = config.db;
     await createConnection(
       [Author, Post, PostCategory, PostDetails, PostComment, User],
       [DataFilling1577087002356],
-      { ...dbConfig, ...ormconfig },
+      { ...dbConfig, ...ormconfig }
     );
 
     const app = express();
@@ -28,12 +43,9 @@ export default (async () => {
     // Posts
     const postsRepository = getRepository(Post);
     app.get('/api/posts/*$metadata', (res, req) => {
-      const metadata = getConnection()
-        .getMetadata(Post)
-        .ownColumns.map((column) => column.propertyName);
-      return req.status(200).json(metadata);
+      return req.status(200).json(getMetadata(Post));
     });
-    app.get('/api/posts', odataQuery(postsRepository));
+    app.get('/api/posts', ODataQueryMiddleware(postsRepository));
 
     app.get('/api/posts/test', (res, req) => {
       const test = getConnection().getMetadata(Post);
@@ -55,28 +67,20 @@ export default (async () => {
 
     // Authors
     const authorsRepository = getRepository(Author);
-    app.get('/api/authors/*$&metadata', (res, req) => {
-      const metadata = getConnection()
-        .getMetadata(Author)
-        .ownColumns.map((column) => column.propertyName);
-      return req.status(200).json(metadata);
+    app.get('/api/authors/*$metadata', (res, req) => {
+      return req.status(200).json(getMetadata(Author));
     });
-    app.get('/api/authors', odataQuery(authorsRepository));
+    app.get('/api/authors', ODataQueryMiddleware(authorsRepository));
 
     // Users
     const usersRepository = getRepository(User);
-    app.get('/api/users/*$&metadata', (res, req) => {
-      const metadata = getConnection()
-        .getMetadata(User)
-        .ownColumns.map((column) => column.propertyName);
-      return req.status(200).json(metadata);
+    app.get('/api/users/*$metadata', (res, req) => {
+      return req.status(200).json(getMetadata(User));
     });
-    app.get('/api/users', odataQuery(usersRepository));
+    app.get('/api/users', ODataQueryMiddleware(usersRepository));
 
     const port = config.http.port;
-    app.listen(port, () =>
-      console.log(`Example app listening on port ${port}!`),
-    );
+    app.listen(port, () => console.log(`Example app listening on port ${port}!`));
   } catch (e) {
     console.error(e, 'Start service error');
   }

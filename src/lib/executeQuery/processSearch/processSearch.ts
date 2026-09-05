@@ -1,9 +1,17 @@
+/**
+ * Реализация клиентского параметра `$search` на уровне SQL TypeORM.
+ *
+ * По метаданным сущности собираются текстовые колонки (LIKE по подстроке, регистронезависимо)
+ * и числовые (точное равенство, только если строка поиска успешно приводится к числу через `Number`).
+ * Условия объединяются через `OR` внутри одной группы `Brackets`, затем добавляются как `andWhere`,
+ * чтобы сочетаться с остальными фильтрами запроса.
+ */
 import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 import { Brackets } from 'typeorm';
 import type { QueryParams } from '../../types';
 
 /**
- * Для столбцов этого типа доступен поиск с использованием оператора LIKE
+ * Имена типов колонок TypeORM/БД, для которых допустим поиск подстроки через `LIKE`.
  */
 export const searchableTextColumnTypes = [
   'varchar',
@@ -48,6 +56,13 @@ export const searchableNumberColumnTypes = [
 export type SearchableTextColumnType = (typeof searchableTextColumnTypes)[number];
 export type SearchableNumberColumnType = (typeof searchableNumberColumnTypes)[number];
 
+/**
+ * Добавляет к `queryBuilder` условия поиска по всем подходящим скалярным колонкам корневой сущности.
+ *
+ * @param metadata - метаданные корневой сущности (список колонок и их типов).
+ * @param $search - строка поиска (уже может быть обрезана снаружи; пустая — ранний выход).
+ * @param alias - SQL-алиас корневой таблицы в запросе.
+ */
 export const processSearch = <T extends ObjectLiteral = ObjectLiteral>(
   queryBuilder: SelectQueryBuilder<T>,
   metadata: EntityMetadata,
