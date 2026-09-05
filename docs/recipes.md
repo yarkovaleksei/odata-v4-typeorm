@@ -44,35 +44,58 @@ curl "http://localhost:3001/api/users?\$top=10&\$orderby=name%20asc"
 
 ## Express: свой обработчик (рекомендуется для публичного API)
 
-`ODataQueryMiddleware` отдаёт `500` на клиентские ошибки и раскрывает текст ошибки СУБД.
-Для публичного API лучше вызывать `executeQuery` напрямую.
+`ODataQueryMiddleware` уже классифицирует ошибки сам. Свой обработчик нужен, когда важен
+формат тела ответа или ограничения зависят от текущего запроса.
 
 ```ts
-import { executeQuery } from 'odata-v4-typeorm-improved';
-import { QueryFailedError } from 'typeorm';
+import { executeQuery, isODataClientError } from 'odata-v4-typeorm-improved';
 
 app.get('/api/users', async (req, res) => {
   try {
     const result = await executeQuery(dataSource.getRepository(User), req.query, {
       alias: 'User',
+      maxTop: 100,
     });
 
     return res.json(result);
   } catch (e) {
-    // Ошибка парсера OData либо ошибка SQL из-за несуществующей колонки — вина клиента
-    const isClientError =
-      e instanceof QueryFailedError || /^Fail at \d+/.test((e as Error).message);
-
     logger.error('OData query failed', { query: req.query, error: e });
 
-    return res.status(isClientError ? 400 : 500).json({
-      message: isClientError ? 'Invalid OData query.' : 'Internal server error.',
-    });
+    // Признак isClientError несут все ошибки библиотеки — разбирать текст не нужно
+    if (isODataClientError(e)) {
+      return res.status(400).json({ message: e.message });
+    }
+
+    return res.status(500).json({ message: 'Internal server error.' });
   }
 });
 ```
 
-Обратите внимание: наружу не уходит `e.message` — он остаётся в логе.
+Обратите внимание: наружу не уходит текст неизвестной ошибки — он остаётся в логе.
+
+---
+
+## Ограничение доступных полей, связей и размера страницы
+
+```ts
+const result = await executeQuery(dataSource.getRepository(User), req.query, {
+  alias: 'User',
+  // $top больше — усекается до 100; отрицательный отвергается как 400
+  maxTop: 100,
+  // полные пути от корня; покрывает $select, $filter и $orderby
+  allowedFields: ['id', 'name', 'email', 'posts/id', 'posts/title'],
+  // имена связей, проверяются на каждом уровне вложенности
+  allowedExpands: ['posts'],
+});
+```
+
+Запрос вне списка отвергается с `ODataInvalidQueryError` (клиентская ошибка → `400`):
+
+```bash
+GET /api/users?$select=passwordHash            # → 400
+GET /api/users?$filter=contains(passwordHash,'a')  # → 400, поле внутри функции тоже видно
+GET /api/users?$expand=sessions                # → 400
+```
 
 ---
 
@@ -416,16 +439,21 @@ GET /api/users?$filter=id in (1,2,3)
 GET /api/users?$filter=id eq 1 or id eq 2 or id eq 3
 ```
 
-**Не оставляйте `$top` неограниченным на публичном API.** Верхней границы у библиотеки нет —
-ставьте свою:
+**Не оставляйте `$top` неограниченным на публичном API.** По умолчанию потолка нет:
 
 ```ts
-const MAX_TOP = 100;
-const top = Math.min(Number(req.query.$top) || 25, MAX_TOP);
-
-const result = await executeQuery(repo, { ...req.query, $top: String(top) }, { alias: 'User' });
+const result = await executeQuery(repo, req.query, { alias: 'User', maxTop: 100 });
 ```
 
-**Не открывайте сущность целиком, если в ней есть чувствительные поля.** `$select` и `$expand`
-не проверяются по белому списку — клиент достанет любое поле и пройдёт по любой связи.
-Используйте отдельные view-сущности либо `SelectQueryBuilder` с явным `select`.
+**Не открывайте сущность целиком, если в ней есть чувствительные поля.** Белые списки
+по умолчанию выключены — клиент вправе достать любое поле и пройти по любой связи:
+
+```ts
+const result = await executeQuery(repo, req.query, {
+  alias: 'User',
+  allowedFields: ['id', 'name', 'email', 'posts/title'],
+  allowedExpands: ['posts'],
+});
+```
+
+Список покрывает и `$select`, и `$filter`, и `$orderby`, включая поля внутри функций.

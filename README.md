@@ -22,6 +22,7 @@ GET /api/users?$filter=contains(name,'ali')&$select=id,name&$orderby=name asc&$t
   - [Express: middleware](#express-middleware)
   - [Express: свой обработчик](#express-свой-обработчик)
   - [Ограничение выдачи правами пользователя](#ограничение-выдачи-правами-пользователя)
+  - [Ограничение доступных полей и размера страницы](#ограничение-доступных-полей-и-размера-страницы)
   - [NestJS](#nestjs)
   - [Без TypeORM: только компиляция в SQL](#без-typeorm-только-компиляция-в-sql)
 - [Примеры OData-запросов](#примеры-odata-запросов)
@@ -70,7 +71,7 @@ await dataSource.initialize();
 
 const app = express();
 
-// alias обязан совпадать с именем класса сущности или именем её таблицы
+// alias задаёт SQL-префикс колонок и имя, под которым сущность попадёт в запрос
 app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), { alias: 'User' }));
 
 app.listen(3001, () => console.log('http://localhost:3001'));
@@ -139,29 +140,27 @@ app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), {
 
 ### Express: свой обработчик
 
-Даёт контроль над кодами ошибок и форматом ответа. Рекомендуется для публичного API.
+Даёт контроль над форматом ответа.
 
 ```ts
-import { executeQuery } from 'odata-v4-typeorm-improved';
-import { QueryFailedError } from 'typeorm';
+import { executeQuery, isODataClientError } from 'odata-v4-typeorm-improved';
 
 app.get('/api/users', async (req, res) => {
   try {
     const result = await executeQuery(dataSource.getRepository(User), req.query, {
       alias: 'User',
+      maxTop: 100,
     });
 
     return res.json(result);
   } catch (e) {
-    // Ошибка парсера OData или SQL из-за несуществующей колонки — вина клиента
-    const isClientError =
-      e instanceof QueryFailedError || /^Fail at \d+/.test((e as Error).message);
-
     logger.error('OData query failed', { query: req.query, error: e });
 
-    return res.status(isClientError ? 400 : 500).json({
-      message: isClientError ? 'Invalid OData query.' : 'Internal server error.',
-    });
+    if (isODataClientError(e)) {
+      return res.status(400).json({ message: e.message });
+    }
+
+    return res.status(500).json({ message: 'Internal server error.' });
   }
 });
 ```
@@ -175,12 +174,29 @@ app.get('/api/users', async (req, res) => {
 app.get('/api/documents', async (req, res) => {
   const qb = dataSource
     .getRepository(Document)
-    .createQueryBuilder('Document')
-    .where('Document.ownerId = :ownerId', { ownerId: req.user.id });
+    .createQueryBuilder('d')
+    .where('d.ownerId = :ownerId', { ownerId: req.user.id });
 
   res.json(await executeQuery(qb, req.query));
 });
 ```
+
+### Ограничение доступных полей и размера страницы
+
+Для публичного API задавайте потолок страницы и белые списки — иначе клиент вправе
+вытащить любое поле сущности, пройти по любой связи и запросить таблицу целиком.
+
+```ts
+const data = await executeQuery(dataSource.getRepository(User), req.query, {
+  alias: 'User',
+  maxTop: 100,                                    // $top больше — усечётся до 100
+  allowedFields: ['id', 'name', 'posts/title'],   // полные пути от корня
+  allowedExpands: ['posts'],                      // имена связей на каждом уровне
+});
+```
+
+`allowedFields` покрывает не только `$select`, но и `$filter` с `$orderby`, включая поля
+внутри функций: `$filter=contains(passwordHash,'x')` будет отвергнут.
 
 ### NestJS
 
@@ -316,38 +332,57 @@ const items = Array.isArray(result) ? result : result.items;
 Учтите: со счётчиком каждый запрос делает **два** обращения к БД. Если счётчик не нужен,
 `$count=false` заметно дешевле.
 
-### `alias` не произвольный
+### Про `alias`
 
-Значение `options.alias` служит и SQL-префиксом колонок, и ключом поиска метаданных сущности.
-Поэтому оно обязано совпадать с именем класса сущности или именем её таблицы:
+`options.alias` — это SQL-префикс колонок. Для `Repository` его нужно задавать (им создаётся
+построитель); для готового `SelectQueryBuilder` — либо не задавать вовсе, либо указать
+его же корневой алиас.
 
 ```ts
-executeQuery(repo, query, { alias: 'User' });  // ✅
-executeQuery(repo, query, { alias: 'u' });     // ❌ Error: No metadata for "u" was found.
+// Repository: алиас задаём
+executeQuery(repository, query, { alias: 'User' });
+
+// QueryBuilder: алиас берётся у него самого, любой
+executeQuery(dataSource.getRepository(User).createQueryBuilder('u'), query);
+
+// ❌ алиас, разошедшийся с алиасом построителя, даст ошибку СУБД
+executeQuery(dataSource.getRepository(User).createQueryBuilder('u'), query, { alias: 'x' });
 ```
 
-То же касается `SelectQueryBuilder`: привычный `createQueryBuilder('u')` не подойдёт,
-нужен `createQueryBuilder('User')`.
+Метаданные сущности берутся из самого построителя, поэтому совпадать с именем класса
+алиасу больше не нужно — привычный TypeORM-стиль `createQueryBuilder('u')` работает.
 
 ### Неподдерживаемое отвергается, а не игнорируется
 
-Если библиотека не может транслировать часть запроса, она бросает `ODataUnsupportedError`,
-а не выполняет запрос без этой части. Это осознанное правило: молча вернуть больше данных,
-чем просил клиент, опаснее явной ошибки.
+Если библиотека не может транслировать часть запроса, она бросает ошибку, а не выполняет
+запрос без этой части. Это осознанное правило: молча вернуть больше данных, чем просил
+клиент, опаснее явной ошибки.
+
+Все ошибки библиотеки несут признак `isClientError`, по которому HTTP-слой отличает
+`400` от `500` без разбора текста сообщения:
+
+| Класс | Когда |
+|---|---|
+| `ODataParseError` | выражение не разобрал парсер |
+| `ODataUnsupportedError` | конструкция вне поддерживаемого подмножества |
+| `ODataInvalidQueryError` | недопустимое значение параметра, поле вне белого списка |
 
 ```ts
-import { ODataUnsupportedError } from 'odata-v4-typeorm-improved';
+import { isODataClientError } from 'odata-v4-typeorm-improved';
 
 try {
   await executeQuery(repo, req.query, { alias: 'User' });
 } catch (e) {
-  if (e instanceof ODataUnsupportedError) {
-    return res.status(400).json({ message: e.message, feature: e.feature });
+  if (isODataClientError(e)) {
+    return res.status(400).json({ message: e.message });
   }
 
   throw e;
 }
 ```
+
+`ODataQueryMiddleware` делает это сам: клиентские ошибки → `400`, остальное → `500`,
+текст исходной ошибки уходит только в лог.
 
 ### Защита от SQL-инъекций
 
@@ -355,10 +390,8 @@ try {
 параметры запроса (`:p0`, `:p1`, …), а в строку идёт плейсхолдер. Имена полей приходят
 из грамматики OData-парсера.
 
-Чего библиотека **не** делает: не ограничивает список доступных полей и связей
-(через `$select` и `$expand` клиент достанет любое поле сущности) и не ставит верхнюю границу
-на `$top`. На публичном API добавьте и то, и другое — примеры в
-[docs/recipes.md](./docs/recipes.md#чего-делать-не-стоит).
+Ограничение полей и размера страницы **не включено по умолчанию** — задайте
+`allowedFields`, `allowedExpands` и `maxTop`, см. раздел выше.
 
 ## Известные ограничения
 
@@ -375,15 +408,16 @@ GET /api/users?$filter=not (name eq 'Alice') and id gt 10
 GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
 ```
 
-**`alias` не может быть произвольным** — см. раздел выше.
-
 **Не поддерживается:** `in`, лямбды `any` / `all`, `replace`, `cast`, геопространственные
 функции, `$apply`, `$compute`, `$levels`, `$skiptoken`, вложенные `$top` / `$skip`
 внутри `$expand`. Все эти случаи отвергаются явной ошибкой, а не выполняются частично.
 
-**Ограничения по СУБД:** `$search` не работает при нестандартной `namingStrategy`
-(snake_case) и на MySQL. Трансляция функций корректна для PostgreSQL, MySQL, SQLite
-и MS SQL, но прогоном на живой БД в CI проверяется только SQLite.
+**Белые списки выключены по умолчанию.** Без `allowedFields` / `allowedExpands` клиент
+видит любое поле сущности и любую связь — см. раздел выше.
+
+**Проверка на живой БД в CI — только SQLite.** Трансляция SQL корректна для PostgreSQL,
+MySQL, SQLite и MS SQL и покрыта юнит-тестами по диалектам, но матричные тесты
+исполняются пока на одной СУБД.
 
 ## Документация
 

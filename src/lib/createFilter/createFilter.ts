@@ -10,6 +10,7 @@ import { filter } from 'odata-v4-parser';
 import type { Token } from 'odata-v4-parser/lib/lexer';
 import { SQLLang } from 'odata-v4-sql';
 
+import { ODataError, ODataParseError } from '../errors';
 import { TypeOrmVisitor } from '../TypeOrmVisitor';
 import type { SqlOptions } from '../types';
 
@@ -25,7 +26,8 @@ import type { SqlOptions } from '../types';
  * @returns посетитель после полного обхода AST и `asType()`.
  *
  * @remarks Мутирует переданный объект `options` (проставляет `type`).
- * @throws {Error} `Error: Fail at <позиция>` из `odata-v4-parser` на некорректном выражении.
+ * @throws {ODataParseError} выражение синтаксически некорректно.
+ * @throws {ODataUnsupportedError} выражение разобрано, но содержит конструкцию без трансляции в SQL.
  *
  * @example
  * // GET /api/Users?$filter=Id eq 42
@@ -38,9 +40,27 @@ export function createFilter(odataFilter: string | Token, options: SqlOptions): 
   options.type = SQLLang.Oracle;
 
   const visitor = new TypeOrmVisitor(options);
-  const ast: Token = <Token>(typeof odataFilter == 'string' ? filter(odataFilter) : odataFilter);
+  const ast: Token = <Token>(
+    (typeof odataFilter == 'string' ? parseOrThrow(odataFilter) : odataFilter)
+  );
   const visit = visitor.Visit(ast);
   const type = visit.asType();
 
   return type;
+}
+
+/**
+ * Разбор выражения с приведением ошибки парсера к типизированной — см. одноимённую
+ * функцию в `createQuery`.
+ */
+function parseOrThrow(odataFilter: string): Token {
+  try {
+    return filter(odataFilter) as Token;
+  } catch (e) {
+    if (e instanceof ODataError) {
+      throw e;
+    }
+
+    throw new ODataParseError(odataFilter, e);
+  }
 }

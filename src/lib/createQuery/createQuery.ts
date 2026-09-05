@@ -15,6 +15,7 @@ import { query } from 'odata-v4-parser';
 import type { Token } from 'odata-v4-parser/lib/lexer';
 import { SQLLang } from 'odata-v4-sql';
 
+import { ODataError, ODataParseError } from '../errors';
 import { TypeOrmVisitor } from '../TypeOrmVisitor';
 import type { SqlOptions } from '../types';
 
@@ -32,9 +33,9 @@ import type { SqlOptions } from '../types';
  *
  * @remarks Мутирует переданный объект `options` (проставляет `type`). Если один и тот же объект
  *   опций переиспользуется между вызовами, это заметно; передавайте литерал.
- * @throws {Error} парсер `odata-v4-parser` бросает `Error: Fail at <позиция>` на синтаксически
- *   некорректной строке. Ошибка не типизирована и не содержит машинно-читаемых полей —
- *   на уровне HTTP её стоит ловить и отдавать как `400`, а не `500`.
+ * @throws {ODataParseError} строка синтаксически некорректна.
+ * @throws {ODataUnsupportedError} строка разобрана, но содержит конструкцию, которую
+ *   библиотека не умеет транслировать в SQL.
  *
  * @example
  * const compiled = createQuery("$filter=Size eq 4 and Age gt 18", { alias: 'user' });
@@ -49,10 +50,34 @@ export function createQuery(odataQuery: string | Token, options: SqlOptions): Ty
 
   const visitor = new TypeOrmVisitor(options);
   // Строка парсится в дерево токенов; если передан Token — повторный разбор не нужен.
-  const ast: Token = <Token>(typeof odataQuery == 'string' ? query(odataQuery) : odataQuery);
+  const ast: Token = <Token>(
+    (typeof odataQuery == 'string' ? parseOrThrow(odataQuery) : odataQuery)
+  );
   const visit = visitor.Visit(ast);
   // asType() обязателен: он приводит плейсхолдеры к формату TypeORM (`?` → `:pN`).
   const type = visit.asType();
 
   return type;
+}
+
+/**
+ * Разбор строки с приведением ошибки парсера к типизированной.
+ *
+ * `odata-v4-parser` бросает безымянный `Error` с текстом `Fail at 0`. Оборачиваем его
+ * здесь — в единственном месте, где ещё известна исходная строка, — чтобы HTTP-слой мог
+ * отличить ошибку клиента от внутреннего сбоя, не разбирая текст сообщения.
+ *
+ * Ошибки самой библиотеки (`ODataError` из обхода AST) пропускаются как есть: они уже
+ * типизированы и несут более точную причину.
+ */
+function parseOrThrow(odataQuery: string): Token {
+  try {
+    return query(odataQuery) as Token;
+  } catch (e) {
+    if (e instanceof ODataError) {
+      throw e;
+    }
+
+    throw new ODataParseError(odataQuery, e);
+  }
 }

@@ -118,6 +118,18 @@ export class TypeOrmVisitor extends Visitor {
   public alias = '';
 
   /**
+   * Пути свойств, которые запрос упомянул на этом уровне: `'name'`, `'books/reviews/score'`.
+   *
+   * Заполняется при обходе `$filter`, `$select` и `$orderby`. Нужно для проверки по белому
+   * списку полей: после компиляции имена колонок уже вплавлены в строку SQL, и достать их
+   * оттуда разбором было бы ненадёжно.
+   *
+   * Пути записываются относительно текущего уровня; полные пути от корня собирает
+   * {@link TypeOrmVisitor.collectReferencedFields}.
+   */
+  public referencedFields: string[] = [];
+
+  /**
    * Порядок разбора верхнеуровневых query options: сначала expand (чтобы появились JOIN-алиасы),
    * затем filter и select. Опции, не перечисленные здесь, получают indexOf -1 и оказываются «раньше»
    * в сортировке (то есть обрабатываются перед тремя перечисленными).
@@ -208,6 +220,76 @@ export class TypeOrmVisitor extends Visitor {
   // ───────────────────────────────────────────────────────────────────────────
   // Работа с целевым фрагментом SQL
   // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Все пути свойств, упомянутые запросом, — от корня и вглубь по связям.
+   *
+   * @param prefix - путь до текущего уровня; при внешнем вызове не задаётся.
+   * @returns пути вида `'name'`, `'books/title'`, `'books/reviews/score'` без повторов.
+   *
+   * @example
+   * const compiled = createQuery('$select=id&$expand=books($select=title)', { alias: 'A' });
+   *
+   * compiled.collectReferencedFields(); // ['id', 'books/title']
+   */
+  public collectReferencedFields(prefix = ''): string[] {
+    const result: string[] = [];
+
+    for (const field of this.referencedFields) {
+      const path = prefix ? `${prefix}/${field}` : field;
+
+      if (!result.includes(path)) {
+        result.push(path);
+      }
+    }
+
+    for (const include of this.includes) {
+      const nested = prefix
+        ? `${prefix}/${include.navigationProperty}`
+        : include.navigationProperty;
+
+      for (const path of include.collectReferencedFields(nested)) {
+        if (!result.includes(path)) {
+          result.push(path);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Имена всех связей, задействованных запросом, на всех уровнях вложенности.
+   *
+   * Включает и связи из `$expand`, и «виртуальные» — созданные путями `связь/поле`
+   * в фильтрах и сортировке.
+   *
+   * @returns имена связей без путей: для `$expand=books($expand=reviews)` — `['books', 'reviews']`.
+   */
+  public collectNavigationProperties(): string[] {
+    const result: string[] = [];
+
+    for (const include of this.includes) {
+      if (!result.includes(include.navigationProperty)) {
+        result.push(include.navigationProperty);
+      }
+
+      for (const nested of include.collectNavigationProperties()) {
+        if (!result.includes(nested)) {
+          result.push(nested);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /** Регистрирует упомянутый путь свойства; повторы отбрасываются. */
+  private trackField(path: string): void {
+    if (!this.referencedFields.includes(path)) {
+      this.referencedFields.push(path);
+    }
+  }
 
   /** Дописывает SQL в поле, указанное `context.target`. */
   private append(context: Context, sql: string): void {
@@ -338,6 +420,8 @@ export class TypeOrmVisitor extends Visitor {
 
     const segments = node.raw.split('/');
 
+    this.trackField(node.raw);
+
     if (segments.length > 1) {
       const field = segments.pop() as string;
       const alias = this.resolveNavigationChain(segments);
@@ -379,6 +463,8 @@ export class TypeOrmVisitor extends Visitor {
       const segments = node.raw.split('/');
       const field = segments.pop() as string;
       const alias = this.resolveNavigationChain(segments);
+
+      this.trackField(node.raw);
 
       this.append(context, `${alias}.${field}`);
       context.identifier = field;
@@ -449,6 +535,8 @@ export class TypeOrmVisitor extends Visitor {
    * {@link TypeOrmVisitor.VisitPropertyPathExpression}.
    */
   protected VisitODataIdentifier(node: Token, context: Context) {
+    this.trackField(node.value.name);
+
     this.append(context, `${this.alias}.${node.value.name}`);
 
     context.identifier = node.value.name;

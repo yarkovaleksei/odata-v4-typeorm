@@ -27,6 +27,8 @@ describe('executeQueryByQueryBuilder', () => {
         getMetadata: jest.fn().mockReturnValue({}),
         // options.type читается для выбора диалекта SQL-функций (LENGTH против LEN и т.п.).
         options: { type: 'sqlite' },
+        // driver.escape экранирует идентификаторы в условиях $search.
+        driver: { escape: (identifier: string) => `"${identifier}"` },
       },
     } as unknown as jest.Mocked<SelectQueryBuilder<ObjectLiteral>>;
 

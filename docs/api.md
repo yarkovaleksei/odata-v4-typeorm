@@ -40,7 +40,10 @@ function executeQuery<T extends ObjectLiteral = ObjectLiteral>(
 |---|---|
 | `repositoryOrQueryBuilder` | `Repository` → будет создан `createQueryBuilder(alias)`. `SelectQueryBuilder` → используется как есть; предустановленные условия сохраняются, OData-условия добавляются через `andWhere` |
 | `query` | Объект параметров, обычно напрямую `req.query`. Значения могут быть строками |
-| `options.alias` | SQL-алиас корневой сущности. **Обязан совпадать с именем класса сущности или именем её таблицы** — по нему ищутся метаданные |
+| `options.alias` | SQL-алиас корневой сущности. Может быть любым: метаданные берутся у построителя. Для готового `SelectQueryBuilder` либо не задавайте, либо задайте его же корневой алиас |
+| `options.maxTop` | Верхняя граница `$top`; запрос с бо́льшим значением усекается |
+| `options.allowedFields` | Белый список полей для `$select` / `$filter` / `$orderby`. Полные пути от корня |
+| `options.allowedExpands` | Белый список связей для `$expand` и путей в фильтрах |
 
 **Возвращает** `{ items, count }`, если `$count` не выключен явно (он включён по умолчанию),
 иначе — массив сущностей.
@@ -49,13 +52,21 @@ function executeQuery<T extends ObjectLiteral = ObjectLiteral>(
 // Репозиторий
 const data = await executeQuery(dataSource.getRepository(User), req.query, { alias: 'User' });
 
-// QueryBuilder с предустановленным ограничением доступа
+// QueryBuilder с предустановленным ограничением доступа. Алиас произвольный.
 const qb = dataSource
   .getRepository(User)
-  .createQueryBuilder('User')
-  .where('User.tenantId = :tenantId', { tenantId: req.user.tenantId });
+  .createQueryBuilder('u')
+  .where('u.tenantId = :tenantId', { tenantId: req.user.tenantId });
 
 const data = await executeQuery(qb, req.query);
+
+// Публичный API: потолок страницы и перечень доступного
+const data = await executeQuery(repository, req.query, {
+  alias: 'User',
+  maxTop: 100,
+  allowedFields: ['id', 'name', 'posts/title'],
+  allowedExpands: ['posts'],
+});
 ```
 
 Сужение типа результата:
@@ -68,12 +79,16 @@ const total = Array.isArray(result) ? result.length : result.count;
 
 **Ошибки**
 
-| Ошибка | Причина |
-|---|---|
-| `Error: Fail at <n>` | Синтаксически некорректный OData-параметр |
-| `ODataUnsupportedError` | Конструкция за пределами поддерживаемого подмножества (`in`, `any`/`all`, `replace`, геофункции). Клиентская ошибка — отдавайте `400` |
-| `EntityMetadataNotFoundError` | `alias` не совпадает с именем сущности/таблицы |
-| `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются |
+| Ошибка | Причина | HTTP |
+|---|---|---|
+| `ODataParseError` | Синтаксически некорректный OData-параметр | `400` |
+| `ODataUnsupportedError` | Конструкция вне поддерживаемого подмножества (`in`, `any`/`all`, `replace`, геофункции) | `400` |
+| `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка | `400` |
+| `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются | `400` |
+| `EntityMetadataNotFoundError` | У построителя нет метаданных и `alias` не соответствует сущности | `500` |
+
+Первые три наследуют `ODataError` и несут признак `isClientError` — см. раздел
+[Ошибки](#ошибки).
 
 ---
 
@@ -100,9 +115,9 @@ function executeQueryByQueryBuilder<T extends ObjectLiteral = ObjectLiteral>(
 ```ts
 function ODataQueryMiddleware<T extends ObjectLiteral = ObjectLiteral>(
   repositoryOrQueryBuilder: Repository<T> | SelectQueryBuilder<T>,
-  settings?: {
-    alias?: string;
+  settings?: ExecuteQueryOptions & {
     logger?: { error: (text: string, ...args: unknown[]) => void };
+    exposeErrors?: boolean;
   }
 ): (req: Request, res: Response, next: NextFunction) => Promise<void>
 ```
@@ -110,6 +125,8 @@ function ODataQueryMiddleware<T extends ObjectLiteral = ObjectLiteral>(
 ```ts
 app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), {
   alias: 'User',
+  maxTop: 100,
+  allowedExpands: ['posts'],
   logger: myLogger,
 }));
 ```
@@ -119,19 +136,22 @@ app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), {
 | Ситуация | Код | Тело |
 |---|---|---|
 | Успех | `200` | Результат `executeQuery` |
-| Любое исключение | `500` | `{ message: 'Internal server error.', error: { message } }` |
+| Некорректный или неподдерживаемый запрос | `400` | `{ message }` с описанием проблемы |
+| Ошибка SQL (обычно несуществующая колонка) | `400` | `{ message: 'Invalid OData query.' }` |
+| Всё остальное | `500` | `{ message: 'Internal server error.' }` |
+
+Текст исходной ошибки наружу не уходит — он всегда пишется в `logger`. Для сред разработки
+есть `exposeErrors: true`, включающий сообщение в тело ответа.
+
+`next(error)` вызывается только при `500`, чтобы ошибка дошла до общего обработчика приложения;
+при `400` цепочка останавливается — это штатный сценарий, а не сбой.
 
 Несмотря на название, обработчик конечный — ставьте его последним в маршруте.
 
-**Ограничения, о которых стоит знать до внедрения:**
-
-- Репозиторий захватывается замыканием один раз, поэтому ограничения, зависящие от запроса
-  (текущий пользователь, тенант), так не задать — для них пишите свой обработчик поверх
-  `executeQuery`.
-- Клиентские ошибки (неверный `$filter`) отдаются как `500`, а не `400`, и наружу уходит
-  текст ошибки СУБД. См. [audit.md](./audit.md), дефект A-07. Если API публичный, лучше
-  использовать `executeQuery` и обрабатывать ошибки самостоятельно — пример в
-  [recipes.md](./recipes.md#express-свой-обработчик-рекомендуется-для-публичного-api).
+**Ограничение:** репозиторий захватывается замыканием один раз, поэтому ограничения,
+зависящие от запроса (текущий пользователь, тенант), так не задать — для них пишите свой
+обработчик поверх `executeQuery`, пример в
+[recipes.md](./recipes.md#ограничение-выдачи-правами-пользователя).
 
 ---
 
@@ -255,39 +275,58 @@ type ParsedQueryParams = Pick<QueryParams, '$search' | '$filter' | '$orderby' | 
 
 ```ts
 interface ExecuteQueryOptions {
-  alias?: string;
+  alias?: string;                        // SQL-префикс колонок
+  maxTop?: number;                       // потолок $top; больше — усекается
+  allowedFields?: readonly string[];     // белый список полей, полные пути от корня
+  allowedExpands?: readonly string[];    // белый список связей, имена без путей
 }
 ```
 
-### `ODataUnsupportedError`
+`allowedFields` перечисляет **все** поля, к которым запрос вправе обратиться, — не только
+через `$select`, но и через `$filter` и `$orderby`, включая аргументы функций.
+Пути указываются от корня: `['id', 'name', 'posts/title']`.
 
-Бросается, когда запрос содержит конструкцию, которую библиотека не умеет транслировать
-в SQL. Ошибка **клиентская** — на уровне HTTP ей соответствует `400`.
+`allowedExpands` проверяется на каждом уровне вложенности: для
+`$expand=posts($expand=comments)` в списке должны быть и `posts`, и `comments`.
+
+## Ошибки
+
+Все ошибки библиотеки наследуют `ODataError` и несут признак `isClientError` —
+по нему HTTP-слой отличает `400` от `500`, не разбирая текст сообщения.
 
 ```ts
-class ODataUnsupportedError extends Error {
-  readonly feature: string;    // 'AnyExpression', 'geo.distance()', 'lambda operators (any/all)'
-  readonly fragment?: string;  // исходный фрагмент запроса
+abstract class ODataError extends Error {
+  abstract readonly isClientError: boolean;
 }
+
+function isODataClientError(error: unknown): error is ODataError;
 ```
 
+| Класс | Когда | Дополнительные поля |
+|---|---|---|
+| `ODataParseError` | выражение не разобрал парсер | `source`, `position?` |
+| `ODataUnsupportedError` | конструкция вне поддерживаемого подмножества | `feature`, `fragment?` |
+| `ODataInvalidQueryError` | значение параметра недопустимо | `parameter` |
+
 ```ts
-import { ODataUnsupportedError } from 'odata-v4-typeorm-improved';
+import { isODataClientError } from 'odata-v4-typeorm-improved';
 
 try {
   await executeQuery(repo, req.query, { alias: 'User' });
 } catch (e) {
-  if (e instanceof ODataUnsupportedError) {
-    return res.status(400).json({ message: e.message, feature: e.feature });
+  if (isODataClientError(e)) {
+    return res.status(400).json({ message: e.message });
   }
 
-  throw e;
+  logger.error('OData query failed', e);
+
+  return res.status(500).json({ message: 'Internal server error.' });
 }
 ```
 
-Существование этой ошибки — следствие правила «молча ничего не терять»: раньше
+Существование этих классов — следствие правила «молча ничего не терять»: раньше
 неподдержанный узел AST просто пропускался, из-за чего `$filter=not (…)` возвращал
-всю таблицу вместо подмножества.
+всю таблицу вместо подмножества, а любая ошибка становилась `500` с текстом СУБД в теле.
 
 ### `GetManyResponse<T>`
 

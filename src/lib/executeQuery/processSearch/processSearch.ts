@@ -13,12 +13,8 @@
  *
  * ОГРАНИЧЕНИЯ:
  * - поиск только по корневой сущности; колонки заджойненных через `$expand` связей не участвуют;
- * - идентификаторы цитируются двойными кавычками (`"alias"."column"`) — это ANSI/PostgreSQL/SQLite,
- *   но не MySQL/MariaDB (обратные кавычки) и не MS SQL в некоторых режимах;
- * - в SQL подставляется `propertyName` (имя свойства класса), а не `databaseName`. Пока имена
- *   совпадают, это работает; при `namingStrategy` вроде snake_case запрос падает
- *   `no such column: Account.firstName`. См. `docs/audit.md`, дефект A-05;
  * - `LIKE` по всем текстовым колонкам без индексов — последовательное сканирование таблицы.
+ *   На больших таблицах вместо `$search` стоит подключать полнотекстовый поиск СУБД.
  */
 import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 import { Brackets } from 'typeorm';
@@ -114,16 +110,41 @@ export const processSearch = <T extends ObjectLiteral = ObjectLiteral>(
   const textColumns: string[] = [];
   const numberColumns: string[] = [];
 
+  /**
+   * Полное имя колонки в SQL: `"User"."first_name"`.
+   *
+   * Два принципиальных момента:
+   *
+   * 1. Берётся `databaseName`, а не `propertyName`. Это разные вещи, как только в проекте
+   *    появляется `namingStrategy`: свойство `firstName` живёт в колонке `first_name`.
+   *    Раньше в SQL уходило имя свойства, и `$search` падал с `no such column: Account.firstName`.
+   *
+   * 2. Экранирование делает драйвер, а не жёстко зашитые двойные кавычки. `"…"` — это
+   *    ANSI/PostgreSQL/SQLite; MySQL по умолчанию понимает под ними строковый литерал,
+   *    а не идентификатор, из-за чего условие там просто не работало.
+   *
+   * Экранирование обязательно и по другой причине: без кавычек TypeORM сам подставил бы
+   * имя колонки по метаданным, но с ними — уже нет, поэтому имя должно быть окончательным.
+   */
+  const escape = (identifier: string) => queryBuilder.connection.driver.escape(identifier);
+  const qualify = (databaseName: string) => `${escape(alias)}.${escape(databaseName)}`;
+
   for (const column of metadata.columns) {
     // Тип колонки в метаданных бывает и строкой ('varchar'), и конструктором (String, Number) —
     // для SQLite TypeORM выводит именно конструкторы. Приводим оба варианта к строке в нижнем регистре.
     const type = typeof column.type === 'function' ? column.type.name : column.type;
     const typeLower: SearchableTextColumnType | SearchableNumberColumnType = type?.toLowerCase();
 
+    // Колонки связей (внешние ключи) пропускаем: их значения клиенту не показываются,
+    // а поиск по ним даёт неожиданные совпадения по идентификаторам.
+    if (column.relationMetadata) {
+      continue;
+    }
+
     if (searchableTextColumnTypes.includes(typeLower as SearchableTextColumnType)) {
-      textColumns.push(column.propertyName);
+      textColumns.push(qualify(column.databaseName));
     } else if (searchableNumberColumnTypes.includes(typeLower as SearchableNumberColumnType)) {
-      numberColumns.push(column.propertyName);
+      numberColumns.push(qualify(column.databaseName));
     }
   }
 
@@ -139,7 +160,7 @@ export const processSearch = <T extends ObjectLiteral = ObjectLiteral>(
     parameters.textSearchValue = `%${searchValue.toLowerCase()}%`;
 
     textColumns.forEach((column) => {
-      conditions.push(`LOWER("${alias}"."${column}") LIKE LOWER(:textSearchValue)`);
+      conditions.push(`LOWER(${column}) LIKE LOWER(:textSearchValue)`);
     });
   }
 
@@ -159,7 +180,7 @@ export const processSearch = <T extends ObjectLiteral = ObjectLiteral>(
     parameters.numberSearchValue = numericValue;
 
     numberColumns.forEach((column) => {
-      conditions.push(`"${alias}"."${column}" = :numberSearchValue`);
+      conditions.push(`${column} = :numberSearchValue`);
     });
   }
 

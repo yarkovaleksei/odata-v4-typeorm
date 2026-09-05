@@ -8,6 +8,7 @@
  *
  * Клиент, чей фильтр не может быть выполнен, обязан получить отказ, а не чужие данные.
  */
+import { ODataError } from './ODataError';
 
 /**
  * Запрошена конструкция OData, которую библиотека не умеет транслировать в SQL.
@@ -24,8 +25,10 @@
  *   }
  * }
  */
-export class ODataUnsupportedError extends Error {
-  /** Имя узла AST либо функции OData, вызвавшей отказ (например `AnyExpression`, `geo.distance`). */
+export class ODataUnsupportedError extends ODataError {
+  public readonly isClientError = true;
+
+  /** Имя узла AST либо функции OData, вызвавшей отказ (например `AnyExpression`, `geo.distance()`). */
   public readonly feature: string;
 
   /** Исходный фрагмент запроса, если парсер его сохранил. Удобно для сообщения пользователю. */
@@ -39,14 +42,10 @@ export class ODataUnsupportedError extends Error {
     super(
       fragment
         ? `OData feature is not supported: ${feature} (in "${fragment}")`
-        : `OData feature is not supported: ${feature}`
+        : `OData feature is not supported: ${feature}`,
+      'ODataUnsupportedError'
     );
 
-    // Обязательно для корректной работы instanceof при компиляции в ES5/ES6:
-    // без этого прототип теряется и `e instanceof ODataUnsupportedError` даёт false.
-    Object.setPrototypeOf(this, ODataUnsupportedError.prototype);
-
-    this.name = 'ODataUnsupportedError';
     this.feature = feature;
     this.fragment = fragment;
   }

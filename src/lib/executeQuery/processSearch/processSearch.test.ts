@@ -9,22 +9,41 @@ import { processSearch } from './processSearch';
 
 type WhereResult = [Brackets, Record<string, string>];
 
-// Мок QueryBuilder
+/**
+ * Мок QueryBuilder.
+ *
+ * `connection.driver.escape` обязателен: имена таблицы и колонок экранирует драйвер,
+ * а не жёстко зашитые кавычки — иначе `$search` не работал бы на MySQL. Здесь берётся
+ * ANSI-форма с двойными кавычками, как в PostgreSQL и SQLite.
+ */
 const createMockQueryBuilder = () => {
   const mock = {
     andWhere: jest.fn().mockReturnThis(),
     orWhere: jest.fn().mockReturnThis(),
+    connection: {
+      driver: { escape: (identifier: string) => `"${identifier}"` },
+    },
   };
 
   return mock as unknown as SelectQueryBuilder<ObjectLiteral>;
 };
 
-// Мок EntityMetadata
-const createMockMetadata = (columns: Partial<EntityMetadata['columns'][0]>[]): EntityMetadata => {
+/**
+ * Мок EntityMetadata.
+ *
+ * `databaseName` по умолчанию совпадает с `propertyName` — так ведёт себя стратегия
+ * именования TypeORM по умолчанию. Тесты, проверяющие поведение при snake_case,
+ * задают его явно.
+ */
+const createMockMetadata = (
+  columns: (Partial<EntityMetadata['columns'][0]> & { databaseName?: string })[]
+): EntityMetadata => {
   return {
     columns: columns.map((col) => ({
       propertyName: col.propertyName,
+      databaseName: col.databaseName ?? col.propertyName,
       type: col.type,
+      relationMetadata: undefined,
     })),
   } as EntityMetadata;
 };

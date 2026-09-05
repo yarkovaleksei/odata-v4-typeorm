@@ -13,9 +13,11 @@
  * Порядок шагов 3–4 важен: `$expand` должен быть разобран раньше `$filter`, иначе фильтр по пути
  * `связь/поле` не найдёт JOIN-алиас. За это отвечает `TypeOrmVisitor.queryOptionsSort`.
  */
-import type { ObjectLiteral, SelectQueryBuilder } from 'typeorm';
+import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 
 import { createQuery } from '../../createQuery';
+import { ODataInvalidQueryError } from '../../errors';
+import type { TypeOrmVisitor } from '../../TypeOrmVisitor';
 import type { QueryParams } from '../../types';
 import { mapToObject } from '../mapToObject';
 import { processIncludes } from '../processIncludes';
@@ -25,6 +27,102 @@ import type { ExecuteQueryOptions, GetManyResponse } from '../types';
 import { parseQueryParams } from './parseQueryParams';
 
 /**
+ * Метаданные корневой сущности.
+ *
+ * Основной путь — взять их у самого построителя. Это снимает давнее ограничение, при котором
+ * `alias` обязан был совпадать с именем сущности: раньше метаданные искались через
+ * `connection.getMetadata(alias)`, и привычный `createQueryBuilder('u')` падал с
+ * `No metadata for "u" was found` (дефект A-03).
+ *
+ * Запасной путь через `getMetadata(alias)` нужен для построителей без собственных метаданных —
+ * например когда корнем выступает подзапрос.
+ */
+function resolveMetadata<T extends ObjectLiteral>(
+  queryBuilder: SelectQueryBuilder<T>,
+  alias: string
+): EntityMetadata {
+  const mainAlias = queryBuilder.expressionMap.mainAlias;
+
+  if (mainAlias?.hasMetadata) {
+    return mainAlias.metadata;
+  }
+
+  return queryBuilder.connection.getMetadata(alias);
+}
+
+/**
+ * Приводит `$top` к разрешённому диапазону.
+ *
+ * Отрицательное значение — ошибка клиента: TypeORM молча игнорирует `take(-5)` и возвращает
+ * всё, то есть запрос выполнился бы не так, как просили, без единого признака.
+ * Превышение `maxTop` не ошибка, а штатное усечение страницы: так ведёт себя большинство
+ * OData-серверов, и клиенту не нужно знать лимит заранее.
+ *
+ * @throws {ODataInvalidQueryError} при отрицательном `$top`.
+ */
+function resolveTop(top: number | undefined, maxTop: number | undefined): number | undefined {
+  if (top === undefined) {
+    return undefined;
+  }
+
+  if (top < 0) {
+    throw new ODataInvalidQueryError('$top', 'value must not be negative');
+  }
+
+  return maxTop !== undefined && top > maxTop ? maxTop : top;
+}
+
+/**
+ * Проверяет `$skip`.
+ *
+ * @throws {ODataInvalidQueryError} при отрицательном значении.
+ */
+function assertSkip(skip: number): void {
+  if (skip < 0) {
+    throw new ODataInvalidQueryError('$skip', 'value must not be negative');
+  }
+}
+
+/**
+ * Сверяет затронутые запросом поля и связи с белыми списками.
+ *
+ * Проверка идёт по скомпилированному запросу, а не по исходным строкам параметров: посетитель
+ * во время обхода собрал точный перечень путей, тогда как разбор `$filter` регулярными
+ * выражениями пропустил бы поля внутри функций и арифметики.
+ *
+ * Списки не заданы — проверка не выполняется, поведение остаётся прежним.
+ *
+ * @throws {ODataInvalidQueryError} если запрос обращается к полю или связи вне списка.
+ */
+function assertAllowed(
+  odataQuery: TypeOrmVisitor,
+  allowedFields?: readonly string[],
+  allowedExpands?: readonly string[]
+): void {
+  if (allowedExpands) {
+    const forbidden = odataQuery
+      .collectNavigationProperties()
+      .filter((navigation) => !allowedExpands.includes(navigation));
+
+    if (forbidden.length) {
+      // Наружу отдаём только то, что клиент и так прислал: имена запрошенных связей.
+      // Разрешённый список не раскрываем — это подсказка для перебора схемы.
+      throw new ODataInvalidQueryError('$expand', `navigation not allowed: ${forbidden.join(', ')}`);
+    }
+  }
+
+  if (allowedFields) {
+    const forbidden = odataQuery
+      .collectReferencedFields()
+      .filter((field) => !allowedFields.includes(field));
+
+    if (forbidden.length) {
+      throw new ODataInvalidQueryError('$select', `field not allowed: ${forbidden.join(', ')}`);
+    }
+  }
+}
+
+/**
  * Выполняет запрос с помощью QueryBuilder с поддержкой OData-подобных параметров.
  *
  * @param inputQueryBuilder - исходный QueryBuilder. Может быть уже с условиями: все условия
@@ -32,20 +130,22 @@ import { parseQueryParams } from './parseQueryParams';
  *   как обязательный фильтр (типовой способ ограничить выдачу правами пользователя).
  * @param query - объект параметров запроса (например, `{ $search: 'text', $top: '10' }`).
  *   Значения могут быть строками — нормализацией занимается `parseQueryParams`.
- * @param options - опции выполнения; `alias` корневой сущности.
+ * @param options - опции выполнения: `alias` корневой сущности, `maxTop`, белые списки
+ *   `allowedFields` и `allowedExpands`.
  * @returns массив сущностей либо `{ items, count }`, если `$count` не выключен явно.
  *
- * @remarks
- * ВАЖНО ПРО `alias`. Он используется двумя разными способами: как SQL-префикс колонок и как ключ
- * поиска метаданных (`connection.getMetadata(alias)`). Второе накладывает жёсткое ограничение:
- * значение обязано совпадать с именем класса сущности или именем её таблицы, иначе TypeORM бросит
- * `No metadata for "<alias>" was found`. Произвольный короткий алиас (`'u'`) работать не будет.
- * См. `docs/audit.md`, дефект A-03.
+ * @remarks `alias` может быть любым: метаданные берутся у самого построителя. Поиск через
+ *   `connection.getMetadata(alias)` остаётся запасным путём — тогда алиас должен совпадать
+ *   с именем сущности или таблицы.
  *
- * @throws {Error} `Fail at <позиция>` — некорректный синтаксис OData-параметров.
- * @throws {EntityMetadataNotFoundError} `alias` не соответствует ни одной сущности.
+ * @throws {ODataParseError} некорректный синтаксис OData-параметров.
+ * @throws {ODataUnsupportedError} конструкция вне поддерживаемого подмножества OData.
+ * @throws {ODataInvalidQueryError} отрицательный `$top` / `$skip` либо обращение к полю
+ *   или связи вне белого списка.
+ * @throws {EntityMetadataNotFoundError} у построителя нет метаданных и `alias` не соответствует
+ *   ни одной сущности.
  * @throws {QueryFailedError} в `$filter` / `$orderby` указана несуществующая колонка: имена полей
- *   в SQL не валидируются по метаданным и попадают в запрос как есть.
+ *   по метаданным не проверяются и попадают в запрос как есть.
  */
 export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = ObjectLiteral>(
   inputQueryBuilder: SelectQueryBuilder<T>,
@@ -57,11 +157,13 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   const { $search, ...parsedQueryWithoutSearch } = parseQueryParams(query);
 
   // Нормализуем опции: alias берём из options, иначе — из корневого алиаса самого QueryBuilder.
-  const localOptions: Required<ExecuteQueryOptions> = {
-    alias: '',
-    ...(options ?? {}),
-  };
-  const alias = localOptions.alias || (inputQueryBuilder.expressionMap.mainAlias?.name ?? '');
+  const { maxTop, allowedFields, allowedExpands } = options ?? {};
+  const alias = options?.alias || (inputQueryBuilder.expressionMap.mainAlias?.name ?? '');
+
+  // Пагинацию проверяем до обращения к БД: смысла компилировать заведомо плохой запрос нет.
+  assertSkip(parsedQueryWithoutSearch.$skip);
+
+  const top = resolveTop(parsedQueryWithoutSearch.$top, maxTop);
 
   // Преобразуем параметры в OData-строку и затем в объект odataQuery.
   // Диалект берётся из подключения: от него зависит, какие SQL-функции подставлять
@@ -72,9 +174,12 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
     dialect: inputQueryBuilder.connection.options.type,
   });
 
+  // Белые списки сверяем сразу после компиляции — до того, как что-либо попадёт в SQL.
+  assertAllowed(odataQuery, allowedFields, allowedExpands);
+
   // Метаданные сущности нужны для двух вещей: списка колонок SELECT по умолчанию
   // и разрешения связей при обработке $expand.
-  const metadata = inputQueryBuilder.connection.getMetadata(alias);
+  const metadata = resolveMetadata(inputQueryBuilder, alias);
 
   let queryBuilder = inputQueryBuilder;
   let rootSelect: string[];
@@ -134,8 +239,8 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // корректный запрос пустой страницы, и его нельзя приравнивать к отсутствию лимита.
   // TypeORM корректно обрабатывает take(0): вернётся ноль строк, а count при $count=true
   // по-прежнему посчитает всю выборку.
-  if (parsedQueryWithoutSearch.$top !== undefined) {
-    queryBuilder = queryBuilder.take(parsedQueryWithoutSearch.$top);
+  if (top !== undefined) {
+    queryBuilder = queryBuilder.take(top);
   }
 
   // $count по умолчанию true (см. parseQueryParams), поэтому форма ответа по умолчанию —
