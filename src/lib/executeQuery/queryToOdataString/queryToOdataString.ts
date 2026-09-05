@@ -1,3 +1,6 @@
+/**
+ * @file Сериализация объекта параметров обратно в формат, ожидаемый `odata-v4-parser.query`.
+ */
 import type { ParsedQueryParams, QueryParams } from '../../types';
 
 /**

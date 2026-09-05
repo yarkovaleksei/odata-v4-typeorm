@@ -1,3 +1,12 @@
+/**
+ * Основной конвейер выполнения OData поверх `SelectQueryBuilder`.
+ *
+ * 1. `parseQueryParams` — нормализация типов и выделение `$search` (он обрабатывается отдельно, не через OData-строку).
+ * 2. `queryToOdataString` — остальные `$...` поля склеиваются в строку для парсера.
+ * 3. `createQuery` — AST → объект `TypeOrmVisitor` с SQL-фрагментами и деревом `includes` для `$expand`.
+ * 4. По метаданным сущности формируется список колонок SELECT, накладываются WHERE/параметры, JOIN-ы,
+ *    сортировка, затем опционально `$search`, пагинация и либо `getMany`, либо `getManyAndCount`.
+ */
 import type { ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 
 import { createQuery } from '../../createQuery';
