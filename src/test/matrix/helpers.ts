@@ -11,6 +11,7 @@ import { executeQuery } from '../../lib/executeQuery';
 import type { QueryParams } from '../../lib/types';
 import { Author, Book, Review } from '../entity';
 import { dataSource } from '../setup/dataSource';
+import { testDatabase, type TestDatabase } from '../setup/testDatabase';
 
 /**
  * Выполняет OData-запрос и возвращает идентификаторы найденных строк в порядке выдачи.
@@ -70,6 +71,15 @@ export interface MatrixCase {
   readonly expected: number[];
   /** Учитывать порядок элементов. */
   readonly sorted?: boolean;
+  /**
+   * СУБД, на которых случай не проверяется, с причиной.
+   *
+   * Нужен там, где расхождение — свойство самой СУБД, а не дефект библиотеки: скажем,
+   * PostgreSQL не выводит типы для выражения из двух безымянных плейсхолдеров.
+   * Пропуск всегда сопровождается пояснением — иначе через полгода не отличить
+   * осознанное исключение от забытого «почини потом».
+   */
+  readonly skipOn?: Partial<Record<TestDatabase, string>>;
 }
 
 /**
@@ -83,6 +93,15 @@ export function runMatrix(
   cases: readonly MatrixCase[]
 ): void {
   it.each(cases.map((c) => [c.name, c] as const))('%s', async (_name, testCase) => {
+    const skipReason = testCase.skipOn?.[testDatabase];
+
+    if (skipReason) {
+      // Явное сообщение вместо тихого пропуска: в выводе видно, что случай не проверялся.
+      console.warn(`пропуск на ${testDatabase}: ${testCase.name} — ${skipReason}`);
+
+      return;
+    }
+
     const actual = await run(testCase.query);
 
     if (testCase.sorted) {

@@ -107,7 +107,9 @@ describe('ODataQueryMiddleware', () => {
       const { state } = await run({ $filter: 'nonexistent eq 1' }, { exposeErrors: true });
 
       expect(state.status).toBe(400);
-      expect(JSON.stringify(state.body)).toContain('nonexistent');
+      // Сам текст у каждой СУБД свой; важно, что он отличается от нейтральной заглушки.
+      expect(state.body).not.toEqual({ message: 'Invalid OData query.' });
+      expect((state.body as { message: string }).message.length).toBeGreaterThan(0);
     });
 
     it('нарушение белого списка отдаётся как 400', async () => {

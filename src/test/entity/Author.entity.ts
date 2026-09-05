@@ -10,7 +10,7 @@
  * | `age`          | integer    | числовые сравнения, арифметика, `$search` по числам  |
  * | `rating`       | float      | дробные литералы, `round` / `floor` / `ceiling`      |
  * | `isActive`     | boolean    | булевы литералы `true` / `false`                     |
- * | `registeredAt` | datetime   | `year` / `month` / `day`, сравнение с датой-временем |
+ * | `registeredAt` | дата-время | `year` / `month` / `day`, сравнение с датой-временем |
  * | `bio`          | text, null | `eq null` → `IS NULL`, `ne null` → `IS NOT NULL`     |
  *
  * Связь `books` даёт первый уровень `$expand`; через {@link Book} доступен и второй
@@ -18,6 +18,7 @@
  */
 import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 
+import { DATETIME_COLUMN_TYPE } from '../setup/testDatabase';
 import { Book } from './Book.entity';
 
 @Entity()
@@ -34,11 +35,19 @@ export class Author {
   @Column('float')
   rating!: number;
 
-  @Column('boolean')
+  // Тип не указан намеренно: TypeORM выведет его из TypeScript и подберёт под драйвер
+  // (`boolean` в PostgreSQL и SQLite, `tinyint` в MySQL) — единого имени типа для всех трёх нет.
+  @Column()
   isActive!: boolean;
 
-  /** Nullable намеренно: единственный способ проверить `IS NULL` на дате. */
-  @Column({ type: 'datetime', nullable: true })
+  /**
+   * Nullable намеренно: единственный способ проверить `IS NULL` на дате.
+   *
+   * Тип берётся из {@link DATETIME_COLUMN_TYPE}: `datetime` понимают MySQL и SQLite,
+   * `timestamp` — PostgreSQL и MySQL, общего для всех трёх нет. Положиться на вывод типа
+   * из TypeScript здесь нельзя — у `Date | null` метаданные декоратора дают `Object`.
+   */
+  @Column({ type: DATETIME_COLUMN_TYPE, nullable: true })
   registeredAt!: Date | null;
 
   /** Nullable намеренно: проверка `bio eq null` / `bio ne null`. */

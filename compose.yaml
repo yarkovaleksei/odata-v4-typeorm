@@ -1,0 +1,46 @@
+# Базы для прогона матрицы совместимости с OData на реальных СУБД.
+#
+#   yarn db:up                              # поднять
+#   TEST_DB=postgres yarn test:unit         # прогнать матрицу на PostgreSQL
+#   TEST_DB=mysql yarn test:unit            # то же на MySQL
+#   yarn db:down                            # погасить и удалить данные
+#
+# Порты намеренно нестандартные (55432 / 53306), чтобы не конфликтовать с локально
+# установленными PostgreSQL и MySQL разработчика.
+#
+# Данные держатся в tmpfs: тесты пересоздают схему на старте, сохранять между запусками
+# нечего, а в памяти это заметно быстрее.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: odata
+      POSTGRES_PASSWORD: odata
+      POSTGRES_DB: odata_test
+    ports:
+      - '55432:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U odata -d odata_test']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: odata
+      MYSQL_PASSWORD: odata
+      MYSQL_DATABASE: odata_test
+    ports:
+      - '53306:3306'
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uodata', '-podata']
+      interval: 3s
+      timeout: 3s
+      retries: 30

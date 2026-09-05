@@ -71,7 +71,9 @@ describe('executeQueryByQueryBuilder', () => {
     expect(mockQueryBuilder.select).toHaveBeenCalledWith(['defaultAlias.id', 'defaultAlias.name']);
     expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('1 = 1');
     expect(mockQueryBuilder.setParameters).toHaveBeenCalledWith({});
-    expect(mockQueryBuilder.skip).toHaveBeenCalledWith(0);
+    // skip(0) не вызывается: нулевое смещение и его отсутствие — одно и то же,
+    // а на MySQL `OFFSET 0` без `LIMIT` вообще не выполняется.
+    expect(mockQueryBuilder.skip).not.toHaveBeenCalled();
     // $top='0' — это явно запрошенная пустая страница (OData v4, раздел 11.2.6.4),
     // поэтому take(0) вызывается. «Лимита нет» выражается отсутствием $top, а не нулём.
     expect(mockQueryBuilder.take).toHaveBeenCalledWith(0);

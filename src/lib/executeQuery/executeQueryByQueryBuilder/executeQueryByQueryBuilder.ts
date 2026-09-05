@@ -149,6 +149,47 @@ function assertSkip(skip: number): void {
 }
 
 /**
+ * Драйверы, которые не умеют `OFFSET` без `LIMIT`.
+ *
+ * Список повторяет условие внутри `SelectQueryBuilder.createLimitOffsetExpression`
+ * в TypeORM: для них построитель заранее бросает `OffsetWithoutLimitNotSupportedError`.
+ * PostgreSQL такой запрос принимает, SQLite подставляет `LIMIT -1`.
+ */
+const DRIVERS_REQUIRING_LIMIT_WITH_OFFSET = [
+  'mysql',
+  'mariadb',
+  'aurora-mysql',
+  'sap',
+  'spanner',
+];
+
+/**
+ * Лимит-заглушка для `$skip` без `$top`.
+ *
+ * `$skip=10` без `$top` — совершенно обычный запрос OData, но на MySQL он не выполняется:
+ * `OFFSET` там требует `LIMIT`. Общепринятый обходной путь — поставить заведомо
+ * недостижимый лимит. `Number.MAX_SAFE_INTEGER` для этого годится: он умещается
+ * в 64-битное целое MySQL и на порядки превышает любой реальный размер таблицы.
+ *
+ * @returns значение для `take()` либо `undefined`, если подстраховка не нужна.
+ */
+function resolveOffsetGuardLimit<T extends ObjectLiteral>(
+  queryBuilder: SelectQueryBuilder<T>,
+  skip: number,
+  top: number | undefined
+): number | undefined {
+  if (skip <= 0 || top !== undefined) {
+    return undefined;
+  }
+
+  const driver = queryBuilder.connection.options.type;
+
+  return DRIVERS_REQUIRING_LIMIT_WITH_OFFSET.includes(driver)
+    ? Number.MAX_SAFE_INTEGER
+    : undefined;
+}
+
+/**
  * Сверяет затронутые запросом поля и связи с белыми списками.
  *
  * Проверка идёт по скомпилированному запросу, а не по исходным строкам параметров: посетитель
@@ -313,16 +354,28 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
     processSearch<T>(queryBuilder, metadata, $search, alias);
   }
 
-  // skip() вызывается всегда, в том числе с нулём: для TypeORM skip(0) эквивалентен отсутствию
-  // смещения и не переводит запрос в режим пагинации через подзапрос.
-  queryBuilder = queryBuilder.skip(parsedQueryWithoutSearch.$skip);
+  // skip() вызывается ТОЛЬКО при ненулевом смещении.
+  //
+  // Раньше он вызывался безусловно, и `skip(0)` без `take` давал `OFFSET 0` без `LIMIT`.
+  // SQLite и PostgreSQL такой запрос принимают, а MySQL — нет: TypeORM заранее бросает
+  // `OffsetWithoutLimitNotSupportedError`, и на MySQL падал вообще любой запрос без `$top`.
+  // Смысл при этом не теряется: нулевое смещение и отсутствие смещения — одно и то же.
+  // См. `docs/audit.md`, дефект A-15.
+  if (parsedQueryWithoutSearch.$skip > 0) {
+    queryBuilder = queryBuilder.skip(parsedQueryWithoutSearch.$skip);
+  }
 
   // Проверка именно на undefined, а не на истинность: `$top=0` по OData v4 (раздел 11.2.6.4) —
   // корректный запрос пустой страницы, и его нельзя приравнивать к отсутствию лимита.
   // TypeORM корректно обрабатывает take(0): вернётся ноль строк, а count при $count=true
   // по-прежнему посчитает всю выборку.
+  const guardLimit = resolveOffsetGuardLimit(queryBuilder, parsedQueryWithoutSearch.$skip, top);
+
   if (top !== undefined) {
     queryBuilder = queryBuilder.take(top);
+  } else if (guardLimit !== undefined) {
+    // `$skip` без `$top` на MySQL требует хоть какого-то `LIMIT` — см. resolveOffsetGuardLimit.
+    queryBuilder = queryBuilder.take(guardLimit);
   }
 
   // $count по умолчанию true (см. parseQueryParams), поэтому форма ответа по умолчанию —

@@ -64,3 +64,75 @@ jobs:
             }
             console.log('Пакет чист: ' + total + ' файлов, тестов нет');
           " "$FILES"
+  # Матрица совместимости с OData на реальных СУБД.
+  #
+  # Основная джоба гоняет тесты на SQLite в памяти — быстро и без внешних зависимостей.
+  # Но трансляция функций OData зависит от диалекта (`LENGTH` против `LEN`, `EXTRACT`
+  # против `strftime`), и одного SQLite мало: строка SQL может выглядеть правильно
+  # и при этом не выполниться. Здесь тот же набор прогоняется на PostgreSQL и MySQL.
+  #
+  # Node берётся одной версии: проверяется поведение СУБД, а не совместимость с рантаймом —
+  # это уже сделала джоба выше.
+  database-matrix:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Падение на одной СУБД не должно скрывать результат на другой.
+      fail-fast: false
+      matrix:
+        include:
+          - database: postgres
+            image: postgres:16-alpine
+            port: 5432
+          - database: mysql
+            image: mysql:8
+            port: 3306
+
+    services:
+      database:
+        image: ${{ matrix.image }}
+        env:
+          # PostgreSQL
+          POSTGRES_USER: odata
+          POSTGRES_PASSWORD: odata
+          POSTGRES_DB: odata_test
+          # MySQL
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_USER: odata
+          MYSQL_PASSWORD: odata
+          MYSQL_DATABASE: odata_test
+        ports:
+          - 3306:3306
+          - 5432:5432
+        # Одна проверка на оба образа: ждём, пока порт начнёт принимать соединения.
+        options: >-
+          --health-cmd "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/${{ matrix.port }}'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'yarn'
+
+      - name: Enable Corepack (for Yarn)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run OData matrix on ${{ matrix.database }}
+        env:
+          TEST_DB: ${{ matrix.database }}
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: ${{ matrix.port }}
+          TEST_DB_USER: odata
+          TEST_DB_PASSWORD: odata
+          TEST_DB_NAME: odata_test
+        run: yarn test:unit

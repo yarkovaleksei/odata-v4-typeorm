@@ -62,8 +62,10 @@ describe('alias', () => {
   it('алиас, разошедшийся с алиасом построителя, даёт ошибку СУБД', async () => {
     const qb = dataSource.getRepository(Author).createQueryBuilder('ignored');
 
+    // Текст ошибки у каждой СУБД свой («no such column» в SQLite, «missing FROM-clause
+    // entry» в PostgreSQL), поэтому проверяем только сам факт отказа и упоминание алиаса.
     await expect(executeQuery(qb, { $select: 'id' }, { alias: 'chosen' })).rejects.toThrow(
-      /no such column: chosen\.id/
+      /chosen/
     );
   });
 
