@@ -1,9 +1,28 @@
 {
   "name": "odata-v4-typeorm-improved",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "OData to TypeORM query compiler",
   "main": "build/src/lib/index.js",
-  "typings": "build/src/lib/index",
+  "types": "build/src/lib/index.d.ts",
+  "typings": "build/src/lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/src/lib/index.d.ts",
+      "require": "./build/src/lib/index.js",
+      "default": "./build/src/lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "build/src/lib",
+    "LICENSE",
+    "README.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
@@ -34,6 +53,7 @@
   },
   "homepage": "https://github.com/yarkovaleksei/odata-v4-typeorm-improved#readme",
   "dependencies": {
+    "odata-v4-literal": "^0.1.1",
     "odata-v4-parser": "^0.1.29",
     "odata-v4-sql": "^0.1.2"
   },

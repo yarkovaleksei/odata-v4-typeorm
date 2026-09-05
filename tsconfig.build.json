@@ -10,8 +10,20 @@
     "outDir": "build",
     "skipLibCheck": true,
     "rootDir": ".",
-    "types": ["@types/express", "@types/jest", "@types/node"]
+    // @types/jest здесь не нужен: тестовые файлы в сборку не входят (см. exclude).
+    "types": ["@types/express", "@types/node"]
   },
   "include": ["src/lib/**/*"],
-  "exclude": ["build", "node_modules", "examples", "src/**/*.(test|spec).ts"]
+  // ВНИМАНИЕ: glob-синтаксис TypeScript поддерживает только `*`, `?` и `**/`.
+  // Групп с альтернативой — `*.(test|spec).ts` — в нём НЕТ: такой шаблон не совпадает
+  // ни с одним файлом, поэтому раньше тесты молча компилировались и попадали в npm-пакет.
+  // Каждое расширение нужно перечислять отдельным шаблоном.
+  "exclude": [
+    "build",
+    "node_modules",
+    "examples",
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "src/test/**/*"
+  ]
 }

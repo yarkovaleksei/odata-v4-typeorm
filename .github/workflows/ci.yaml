@@ -38,3 +38,29 @@ jobs:
 
       - name: Run build library
         run: yarn build
+
+      # Раньше exclude в tsconfig.build.json использовал шаблон `*.(test|spec).ts`,
+      # который TypeScript не понимает (групп с альтернативой в его glob нет),
+      # и скомпилированные тесты молча уезжали в npm-пакет. Проверка сторожит регрессию.
+      - name: Check package contents
+        run: |
+          FILES=$(npm pack --dry-run --json | node -e "
+            let d = '';
+            process.stdin.on('data', (c) => (d += c));
+            process.stdin.on('end', () => {
+              const pkg = JSON.parse(d)[0];
+              const bad = pkg.files
+                .map((f) => f.path)
+                .filter((p) => /\.(test|spec)\./.test(p) || p.startsWith('build/src/test/'));
+              console.log(JSON.stringify({ total: pkg.entryCount, bad }));
+            });
+          ")
+          echo "$FILES"
+          node -e "
+            const { total, bad } = JSON.parse(process.argv[1]);
+            if (bad.length) {
+              console.error('Тестовые файлы попали в пакет:\n' + bad.join('\n'));
+              process.exit(1);
+            }
+            console.log('Пакет чист: ' + total + ' файлов, тестов нет');
+          " "$FILES"
