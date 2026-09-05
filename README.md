@@ -1,40 +1,183 @@
-# OData V4 Service modules - TYPEORM Connector
+# odata-v4-typeorm-improved
 
 [![NPM](https://nodei.co/npm/odata-v4-typeorm-improved.png)](https://npmjs.org/package/odata-v4-typeorm-improved)
 
-Service OData v4 requests from a TYPEORM.
+Компилятор OData v4 query options в запросы TypeORM. Превращает `?$filter=…&$top=…&$expand=…`
+из строки запроса в готовый `SelectQueryBuilder` — без ручной сборки условий.
 
-## Synopsis
-
-The OData V4 TYPEORM Connector provides functionality to convert the various types of OData segments
-into SQL query statements, that you can execute over a TYPEORM.
-
-## Potential usage scenarios
-
-- Create high speed, standard compliant data sharing APIs
-
-## Example server
-
-The example server will automatically reflect the main project and automatically re-build on changes.
-```bash
-cd examples/server
-yarn install
-yarn serve
+```ts
+app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), { alias: 'User' }));
 ```
 
-## Usage as server - TypeScript
+```
+GET /api/users?$filter=contains(name,'ali')&$select=id,name&$orderby=name asc&$top=10
+```
 
-Example request:
-- GET [/api/users/$metadata](http://localhost:3001/api/users/$metadata)
-- GET [/api/users?$search=user&$select=id,username](http://localhost:3001/api/users?$search=user&$select=id,username)
+## Содержание
 
-## NestJS middleware
+- [Установка](#установка)
+- [Быстрый старт](#быстрый-старт)
+- [Что поддерживается](#что-поддерживается)
+- [Способы использования](#способы-использования)
+  - [Express: middleware](#express-middleware)
+  - [Express: свой обработчик](#express-свой-обработчик)
+  - [Ограничение выдачи правами пользователя](#ограничение-выдачи-правами-пользователя)
+  - [NestJS](#nestjs)
+  - [Без TypeORM: только компиляция в SQL](#без-typeorm-только-компиляция-в-sql)
+- [Примеры OData-запросов](#примеры-odata-запросов)
+- [Важные особенности](#важные-особенности)
+- [Известные ограничения](#известные-ограничения)
+- [Документация](#документация)
+- [Для разработчиков пакета](#для-разработчиков-пакета)
+- [Лицензия](#лицензия)
 
-##### middleware
+## Установка
 
-```typescript
+```bash
+npm install odata-v4-typeorm-improved
+# или
+yarn add odata-v4-typeorm-improved
+```
+
+`typeorm` — peer-зависимость, версия `^0.3.28`:
+
+```bash
+npm install typeorm
+```
+
+Требуется Node.js 20 или новее.
+
+## Быстрый старт
+
+```ts
+import express from 'express';
+import { DataSource } from 'typeorm';
+import { ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
+
+import { User } from './entities/User';
+
+const dataSource = new DataSource({
+  type: 'postgres',
+  host: 'localhost',
+  port: 5432,
+  username: 'postgres',
+  password: 'postgres',
+  database: 'app',
+  entities: [User],
+});
+
+await dataSource.initialize();
+
+const app = express();
+
+// alias обязан совпадать с именем класса сущности или именем её таблицы
+app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), { alias: 'User' }));
+
+app.listen(3001, () => console.log('http://localhost:3001'));
+```
+
+Проверка:
+
+```bash
+curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc"
+```
+
+Ответ:
+
+```json
+{
+  "items": [
+    { "id": 1, "name": "Alice", "email": "alice@example.com" },
+    { "id": 2, "name": "Bob", "email": "bob@example.com" }
+  ],
+  "count": 2
+}
+```
+
+## Что поддерживается
+
+| Опция | Статус | Пример |
+|---|---|---|
+| `$filter` | ⚠️ | `$filter=name eq 'Alice' and id gt 10` |
+| `$select` | ✅ | `$select=id,name` |
+| `$orderby` | ⚠️ | `$orderby=name desc,id asc` |
+| `$top` / `$skip` | ✅ | `$top=20&$skip=40` |
+| `$count` | ⚠️ | `$count=false` — включён по умолчанию |
+| `$expand` | ⚠️ | `$expand=posts($select=id,title)` |
+| `$search` | ⚠️ | `$search=alice` |
+
+Оговорки (⚠️) существенные — полная матрица с проверенным поведением каждого оператора
+и каждой функции: **[docs/odata-support.md](./docs/odata-support.md)**.
+
+Короткая версия: `not`, арифметика (`add`, `sub`, `mul`, `div`, `mod`), `in`, лямбды
+(`any` / `all`), `$apply`, `$compute` — **не работают**.
+
+## Способы использования
+
+### Express: middleware
+
+Самый короткий путь. Обработчик сам отправляет JSON.
+
+```ts
+import { ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
+
+app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), {
+  alias: 'User',
+  logger: myLogger,   // необязательно, по умолчанию console
+}));
+```
+
+### Express: свой обработчик
+
+Даёт контроль над кодами ошибок и форматом ответа. Рекомендуется для публичного API.
+
+```ts
+import { executeQuery } from 'odata-v4-typeorm-improved';
+import { QueryFailedError } from 'typeorm';
+
+app.get('/api/users', async (req, res) => {
+  try {
+    const result = await executeQuery(dataSource.getRepository(User), req.query, {
+      alias: 'User',
+    });
+
+    return res.json(result);
+  } catch (e) {
+    // Ошибка парсера OData или SQL из-за несуществующей колонки — вина клиента
+    const isClientError =
+      e instanceof QueryFailedError || /^Fail at \d+/.test((e as Error).message);
+
+    logger.error('OData query failed', { query: req.query, error: e });
+
+    return res.status(isClientError ? 400 : 500).json({
+      message: isClientError ? 'Invalid OData query.' : 'Internal server error.',
+    });
+  }
+});
+```
+
+### Ограничение выдачи правами пользователя
+
+Передайте `SelectQueryBuilder` с уже наложенным условием — OData-фильтры добавляются
+через `andWhere`, обойти ваше условие нельзя.
+
+```ts
+app.get('/api/documents', async (req, res) => {
+  const qb = dataSource
+    .getRepository(Document)
+    .createQueryBuilder('Document')
+    .where('Document.ownerId = :ownerId', { ownerId: req.user.id });
+
+  res.json(await executeQuery(qb, req.query));
+});
+```
+
+### NestJS
+
+```ts
+// odata-users.middleware.ts
 import { Inject, Injectable, NestMiddleware } from '@nestjs/common';
-import { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
 import { Repository } from 'typeorm';
 
@@ -46,189 +189,237 @@ export class OdataUsersMiddleware implements NestMiddleware {
     @Inject('USERS_REPOSITORY') private readonly usersRepository: Repository<UserEntity>
   ) {}
 
-  use(req: Request, res: Response, next: Function) {
-    ODataQueryMiddleware(this.usersRepository)(req, res, next);
+  use(req: Request, res: Response, next: NextFunction) {
+    return ODataQueryMiddleware(this.usersRepository, { alias: 'UserEntity' })(req, res, next);
   }
 }
 ```
 
-##### users repository provider
-
-```typescript
-import { Connection } from 'typeorm';
-
-import { UserEntity } from '../user.entity';
-
-export const userProviders = [
-  {
-    provide: 'USERS_REPOSITORY',
-    useFactory: (connection: Connection) => connection.getRepository(UserEntity),
-    inject: ['DATABASE_CONNECTION'],
-  }
-];
-```
-
-##### database provider
-
-```typescript
-import { createConnection } from 'typeorm';
-
-import { UserEntity } from '../entities/user.entity';
-
-export const databaseProviders = [
-  {
-    provide: 'DATABASE_CONNECTION',
-    useFactory: async () => await createConnection({
-      type: 'postgres',
-      host: 'localhost',
-      port: 5432,
-      username: 'postgres',
-      password: 'root',
-      database: 'test',
-      synchronize: true,
-      entities: [UserEntity]
-    }),
-  },
-];
-```
-
-##### app module
-
-```typescript
-import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
-
-import { databaseProviders } from './db/database.providers';
-import { OdataUsersMiddleware } from './middlewares/odataUsers.middleware';
-import { userProviders } from './providers/user.providers';
-
-@Module({
-  providers: [
-    ...databaseProviders,
-    ...userProviders,
-  ],
-})
+```ts
+// app.module.ts
+@Module({ providers: [...databaseProviders, ...userProviders] })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer
-      .apply(OdataUsersMiddleware)
-      .forRoutes('api/v1/odata/users');
+    consumer.apply(OdataUsersMiddleware).forRoutes('api/v1/odata/users');
   }
 }
 ```
 
-## ODataQueryMiddleware
+Провайдеры `DataSource` и репозитория, а также вариант через контроллер (с корректными
+кодами ошибок) — в [docs/recipes.md](./docs/recipes.md#nestjs-middleware).
 
-```typescript
-import express from 'express';
-import { ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
-import { getRepository } from 'typeorm';
+### Без TypeORM: только компиляция в SQL
 
-import { User } from '../entities/user';
+`createFilter` и `createQuery` возвращают фрагменты SQL и параметры — к базе не обращаются.
 
-const app = express();
-const usersRepository = getRepository(User);
+```ts
+import { createFilter, mapToObject } from 'odata-v4-typeorm-improved';
 
-app.get('/api/users', ODataQueryMiddleware(usersRepository));
+// GET /api/users?$filter=Id eq 42
+const compiled = createFilter(req.query.$filter, { alias: '' });
 
-const port = 3001;
-app.listen(port, () => console.log(`Example app listening on port ${port}!`));
+compiled.where;                    // 'Id = :p0'
+mapToObject(compiled.parameters);  // { p0: 42 }
+
+connection.query(`SELECT * FROM users WHERE ${compiled.where}`, [42]);
 ```
 
-## executeQuery by repository
+Полный пример с `pg` и `odata-v4-server`: [src/example/sql.ts](./src/example/sql.ts).
 
-```typescript
-import express from 'express';
-import { executeQuery } from 'odata-v4-typeorm-improved';
-import { getRepository } from 'typeorm';
+## Примеры OData-запросов
 
-import { User } from '../entities/user';
+Для сущности `User { id, name, email, posts: Post[] }`:
 
-const app = express();
+```bash
+# Фильтрация
+GET /api/users?$filter=name eq 'Alice'
+GET /api/users?$filter=id gt 10 and id lt 100
+GET /api/users?$filter=(name eq 'Alice' or name eq 'Bob') and id gt 1
+GET /api/users?$filter=email eq null
+GET /api/users?$filter=name ne 'Alice'
 
-app.get('/api/users', async (req, res) => {
-  try {
-    const usersRepository = getRepository(User);
-    const data = await executeQuery(usersRepository, req.query);
-    return res.status(200).json(data);
-  } catch (e) {
-    return res.status(500).json({message: 'Internal server error.'});
-  }
-});
+# Строковые функции
+GET /api/users?$filter=contains(name,'ali')
+GET /api/users?$filter=startswith(email,'admin')
+GET /api/users?$filter=endswith(email,'.com')
+GET /api/users?$filter=tolower(name) eq 'alice'
 
-const port = 3001;
-app.listen(port, () => console.log(`Example app listening on port ${port}!`));
+# Выборка полей и сортировка
+GET /api/users?$select=id,name
+GET /api/users?$orderby=name asc
+GET /api/users?$orderby=name desc,id asc
+
+# Пагинация
+GET /api/users?$top=20&$skip=40
+GET /api/users?$top=20&$count=false      # ответ — массив, без счётчика
+
+# Связи
+GET /api/users?$expand=posts
+GET /api/users?$expand=posts($select=id,title)
+GET /api/users?$expand=posts($orderby=id desc)
+GET /api/users?$expand=posts($expand=comments)
+
+# Фильтр по полю связи (без одновременного $expand той же связи)
+GET /api/users?$filter=posts/title eq 'Hello'
+
+# Поиск по всем скалярным колонкам
+GET /api/users?$search=alice
+
+# Комбинация
+GET /api/users?$filter=id gt 1&$select=id,name&$orderby=name asc&$top=10
 ```
 
-## executeQuery by queryBuilder
+В реальных вызовах не забывайте про URL-кодирование (`$` → `%24`, пробел → `%20`).
+В оболочке `$` нужно экранировать:
 
-```typescript
-import express from 'express';
-import { executeQuery } from 'odata-v4-typeorm-improved';
-import { getRepository } from 'typeorm';
-
-import { User } from '../entities/user';
-
-const app = express();
-
-app.get('/api/users', async (req, res) => {
-  try {
-    const queryBuilder = getRepository(User)
-      .createQueryBuilder("user")
-      .where("user.roleName = :roleName", { roleName: 'admin' });
-    const data = await executeQuery(queryBuilder, req.query);
-    return res.status(200).json(data);
-  } catch (e) {
-    return res.status(500).json({message: 'Internal server error.'});
-  }
-});
-
-const port = 3001;
-app.listen(port, () => console.log(`Example app listening on port ${port}!`));
+```bash
+curl "http://localhost:3001/api/users?\$filter=name%20eq%20'Alice'"
 ```
 
-## createFilter
+## Важные особенности
 
-```javascript
-import { createFilter } from 'odata-v4-typeorm-improved'
+### `$count` включён по умолчанию
 
-//example request:  GET /api/Users?$filter=Id eq 42
-app.get("/api/Users", (req: Request, res: Response) => {
-    const filter = createFilter(req.query.$filter);
-    // connection instance from pg module
-    connection.query(`SELECT * FROM Users WHERE ${filter.where}`, filter.parameters, function(err, result){
-        res.json({
-        	'@odata.context': req.protocol + '://' + req.get('host') + '/api/$metadata#Users',
-        	value: result.rows
-        });
-    });
-});
+Отличие от спецификации OData, о которое спотыкаются первым делом.
+
+```ts
+await executeQuery(repo, {}, { alias: 'User' });
+// → { items: [...], count: 42 }      ← объект, не массив
+
+await executeQuery(repo, { $count: 'false' }, { alias: 'User' });
+// → [...]                            ← массив
 ```
 
-Advanced TypeScript example available [here](https://raw.githubusercontent.com/yarkovaleksei/odata-v4-typeorm-improved/refs/heads/master/src/example/sql.ts).
+Универсальное сужение типа:
 
-## Usage ES5
-```javascript
-var createFilter = require('odata-v4-typeorm-improved').createFilter;
-
-app.get("/api/Users", function(req, res) {
-    var filter = createFilter(req.query.$filter);
-    // connection instance from pg module
-    connection.query(filter.from("Users"), filter.parameters, function(err, result){
-        res.json({
-        	'@odata.context': req.protocol + '://' + req.get('host') + '/api/$metadata#Users',
-        	value: result.rows
-        });
-    });
-})
+```ts
+const result = await executeQuery(repo, req.query, { alias: 'User' });
+const items = Array.isArray(result) ? result : result.items;
 ```
 
-## Supported OData segments
+Учтите: со счётчиком каждый запрос делает **два** обращения к БД. Если счётчик не нужен,
+`$count=false` заметно дешевле.
 
-* $search
-* $filter
-* $orderby
-* $select
-* $expand
-* $top
-* $skip
-* $count
+### `alias` не произвольный
+
+Значение `options.alias` служит и SQL-префиксом колонок, и ключом поиска метаданных сущности.
+Поэтому оно обязано совпадать с именем класса сущности или именем её таблицы:
+
+```ts
+executeQuery(repo, query, { alias: 'User' });  // ✅
+executeQuery(repo, query, { alias: 'u' });     // ❌ Error: No metadata for "u" was found.
+```
+
+То же касается `SelectQueryBuilder`: привычный `createQueryBuilder('u')` не подойдёт,
+нужен `createQueryBuilder('User')`.
+
+### Защита от SQL-инъекций
+
+Значения из `$filter` и `$search` никогда не попадают в SQL напрямую — они уходят в
+параметры запроса (`:p0`, `:p1`, …), а в строку идёт плейсхолдер. Имена полей приходят
+из грамматики OData-парсера.
+
+Чего библиотека **не** делает: не ограничивает список доступных полей и связей
+(через `$select` и `$expand` клиент достанет любое поле сущности) и не ставит верхнюю границу
+на `$top`. На публичном API добавьте и то, и другое — примеры в
+[docs/recipes.md](./docs/recipes.md#чего-делать-не-стоит).
+
+## Известные ограничения
+
+Перед внедрением стоит знать. Полный разбор с воспроизведением — в
+[docs/audit.md](./docs/audit.md).
+
+**Не сработает как ожидается:**
+
+```bash
+# ❌ вернёт ВСЮ таблицу: оператор not молча отбрасывается
+GET /api/users?$filter=not (name eq 'Alice')
+# ✅ используйте ne
+GET /api/users?$filter=name ne 'Alice'
+
+# ❌ ошибка СУБД: алиасы $expand и пути в фильтре не совпадают
+GET /api/users?$expand=posts&$filter=posts/title eq 'x'
+# ✅ фильтр по связи без $expand
+GET /api/users?$filter=posts/title eq 'x'
+
+# ❌ молча вернёт не те строки: плейсхолдеры LIKE сбивают нумерацию
+GET /api/users?$filter=name eq 'Alice' and contains(email,'alice')
+# ✅ либо только сравнения, либо только LIKE-функции
+GET /api/users?$filter=contains(email,'alice') and startswith(name,'A')
+```
+
+**Не поддерживается вовсе:** `not`, арифметика, `in`, `any` / `all`, `$apply`, `$compute`,
+`$levels`, `$skiptoken`, вложенные `$top` / `$skip` внутри `$expand`.
+
+**Ограничения по СУБД:** `$search` не работает при нестандартной `namingStrategy` (snake_case)
+и на MySQL; функции `length`, `now`, `indexof`, `trim` генерируются без учёта диалекта.
+Регулярно проверяется в CI только SQLite.
+
+## Документация
+
+| Документ | О чём |
+|---|---|
+| [docs/api.md](./docs/api.md) | Справочник по всем экспортам |
+| [docs/recipes.md](./docs/recipes.md) | Готовые примеры под конкретные задачи |
+| [docs/odata-support.md](./docs/odata-support.md) | Матрица поддержки OData |
+| [docs/architecture.md](./docs/architecture.md) | Устройство конвейера |
+| [docs/development.md](./docs/development.md) | Работа над пакетом |
+| [docs/audit.md](./docs/audit.md) | Аудит: дефекты, безопасность, инфраструктура |
+| [docs/roadmap.md](./docs/roadmap.md) | План работ |
+
+## Для разработчиков пакета
+
+```bash
+git clone https://github.com/yarkovaleksei/odata-v4-typeorm-improved.git
+cd odata-v4-typeorm-improved
+yarn install
+```
+
+### Команды
+
+| Команда | Что делает |
+|---|---|
+| `yarn test:unit` | Прогон тестов Jest (SQLite в памяти, схема пересоздаётся перед каждым тестом) |
+| `yarn lint` | ESLint по всем `.ts` / `.tsx` |
+| `yarn lint:fix` | То же с автоисправлением |
+| `yarn build` | Чистая пересборка в `build/` |
+| `yarn server` | Демо-сервер из `examples/server` с автоперезапуском |
+| `yarn release` | `build` + `npm publish` |
+| `yarn release:beta` | `build` + `npm publish --tag beta` |
+
+Перед коммитом — та же цепочка, что гоняет CI на Node 20/22/24:
+
+```bash
+yarn lint && yarn test:unit && yarn build
+```
+
+### Полезные вызовы
+
+```bash
+# Один тестовый файл
+yarn test:unit --testPathPatterns=processSearch
+
+# Тесты по имени
+yarn test:unit -t 'должен обработать AND/OR'
+
+# Watch-режим и покрытие
+yarn test:unit --watch
+yarn test:unit --coverage
+
+# Что попадёт в npm-пакет
+npm pack --dry-run
+
+# Посмотреть, во что компилируется конкретный OData-запрос
+yarn build && node -e "
+const { createQuery } = require('./build/src/lib/createQuery');
+const q = createQuery(\"\\\$filter=name eq 'Ann'\", { alias: 'user' });
+console.log(q.where, [...q.parameters]);
+"
+```
+
+Подробнее — отладка, структура проекта, как писать тесты, порядок релиза:
+[docs/development.md](./docs/development.md).
+
+## Лицензия
+
+[MIT](./LICENSE) © yarkovaleksei

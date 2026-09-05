@@ -1,12 +1,15 @@
 /**
- * Компиляция полной OData query string (или уже разобранного AST) в объект-посетитель TypeORM.
+ * @file Компиляция полной OData query string (или уже разобранного AST) в объект-посетитель TypeORM.
  *
  * Цепочка: строка → парсер `odata-v4-parser` → AST (`Token`) → обход через `TypeOrmVisitor`
  * (наследник `odata-v4-sql` Visitor) → результат с полями `where`, `select`, `orderby`, `parameters`,
  * вложенными `includes` для `$expand` и т.д.
  *
- * Явно выставляется `SQLLang.Oracle`, чтобы совпадать с диалектом, под который заточены
- * шаблоны SQL в базовом посетителе и переопределениях (`FETCH NEXT …`, `OFFSET … ROWS`).
+ * `SQLLang.Oracle` выставляется не ради синтаксиса Oracle, а ради формата плейсхолдеров:
+ * именно ветка `asOracleSql()` в базовом посетителе переписывает позиционные `?` в именованные `:pN`,
+ * которые умеет связывать TypeORM QueryBuilder. Побочный эффект — Oracle-стиль пагинации
+ * (`OFFSET … ROWS FETCH NEXT … ROWS ONLY`) в методе `TypeOrmVisitor.from()`; на сценарий с
+ * QueryBuilder он не влияет, потому что там пагинацию делает сам TypeORM.
  */
 import { query } from 'odata-v4-parser';
 import type { Token } from 'odata-v4-parser/lib/lexer';
@@ -18,13 +21,28 @@ import type { SqlOptions } from '../types';
 /**
  * Собирает дескриптор запроса (фрагменты SQL и метаданные) из OData query.
  *
- * @param odataQuery - либо полная строка query options OData, либо готовый AST.
- * @param options - опции SQL-генерации; обязателен `alias` корневой сущности.
- * @returns экземпляр `TypeOrmVisitor` после обхода AST (`asType()` уже применён внутри).
+ * Значения по умолчанию для пустого запроса задаёт базовый посетитель: `select === '*'`,
+ * `where === '1 = 1'`, `orderby === '1'`. Вызывающий код (`executeQueryByQueryBuilder`,
+ * `processIncludes`) опирается на эти «пустые» значения как на признак «опция не задана».
+ *
+ * @param odataQuery - либо полная строка query options OData (`$filter=…&$top=…`), либо готовый AST.
+ * @param options - опции SQL-генерации; обязателен `alias` корневой сущности. Поле `type`
+ *   перезаписывается принудительно, передавать его смысла нет.
+ * @returns экземпляр `TypeOrmVisitor` после обхода AST и `asType()`.
+ *
+ * @remarks Мутирует переданный объект `options` (проставляет `type`). Если один и тот же объект
+ *   опций переиспользуется между вызовами, это заметно; передавайте литерал.
+ * @throws {Error} парсер `odata-v4-parser` бросает `Error: Fail at <позиция>` на синтаксически
+ *   некорректной строке. Ошибка не типизирована и не содержит машинно-читаемых полей —
+ *   на уровне HTTP её стоит ловить и отдавать как `400`, а не `500`.
  *
  * @example
- * const compiled = createQuery("$filter=Size eq 4 and Age gt 18", { alias: "user", useParameters: true });
- * // compiled.where, compiled.parameters — для подстановки в QueryBuilder
+ * const compiled = createQuery("$filter=Size eq 4 and Age gt 18", { alias: 'user' });
+ *
+ * compiled.where;      // 'user.Size = :p0 AND user.Age > :p1'
+ * compiled.parameters; // Map { 'p0' => 4, 'p1' => 18 }
+ *
+ * queryBuilder.andWhere(compiled.where).setParameters(mapToObject(compiled.parameters));
  */
 export function createQuery(odataQuery: string | Token, options: SqlOptions): TypeOrmVisitor {
   options.type = SQLLang.Oracle;
@@ -33,6 +51,7 @@ export function createQuery(odataQuery: string | Token, options: SqlOptions): Ty
   // Строка парсится в дерево токенов; если передан Token — повторный разбор не нужен.
   const ast: Token = <Token>(typeof odataQuery == 'string' ? query(odataQuery) : odataQuery);
   const visit = visitor.Visit(ast);
+  // asType() обязателен: он приводит плейсхолдеры к формату TypeORM (`?` → `:pN`).
   const type = visit.asType();
 
   return type;

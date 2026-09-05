@@ -1,8 +1,10 @@
 /**
- * Компиляция только выражения `$filter` (без остальных query options) в тот же формат, что и `createQuery`.
+ * @file Компиляция одного выражения `$filter` (без остальных query options) в тот же формат,
+ * что и `createQuery`.
  *
- * Используется парсер `filter` из `odata-v4-parser` вместо `query`, чтобы разбирать короткое
- * выражение сравнений и логики, а не полный набор OData options.
+ * Разница с `createQuery` — только в точке входа парсера: здесь используется `filter()`, который ждёт
+ * голое булево выражение (`name eq 'Ann'`), а не строку query options (`$filter=name eq 'Ann'`).
+ * Всё остальное — тот же `TypeOrmVisitor`, тот же `asType()`, тот же формат результата.
  */
 import { filter } from 'odata-v4-parser';
 import type { Token } from 'odata-v4-parser/lib/lexer';
@@ -14,12 +16,23 @@ import type { SqlOptions } from '../types';
 /**
  * Строит объект `TypeOrmVisitor` с заполненным `where` (и связанными полями) из OData filter.
  *
- * @param odataFilter - строка выражения или готовый AST.
- * @param options - опции SQL-генерации, включая `alias`.
- * @returns посетитель после полного обхода AST.
+ * Основной сценарий — «сырой» SQL мимо TypeORM: получить `where` + `parameters` и подставить их
+ * в собственный запрос (см. `src/example/sql.ts`). Для TypeORM удобнее `executeQuery`.
+ *
+ * @param odataFilter - голое выражение фильтра (без префикса `$filter=`) или готовый AST.
+ * @param options - опции SQL-генерации; `alias` задаёт префикс колонок. Передайте `''`,
+ *   если префикс не нужен (запрос к одной таблице без алиаса).
+ * @returns посетитель после полного обхода AST и `asType()`.
+ *
+ * @remarks Мутирует переданный объект `options` (проставляет `type`).
+ * @throws {Error} `Error: Fail at <позиция>` из `odata-v4-parser` на некорректном выражении.
  *
  * @example
- * const compiled = createFilter("name eq 'Ann'", { alias: "post", useParameters: true });
+ * // GET /api/Users?$filter=Id eq 42
+ * const compiled = createFilter(req.query.$filter, { alias: '' });
+ *
+ * compiled.where;      // 'Id = :p0'
+ * compiled.parameters; // Map { 'p0' => 42 }
  */
 export function createFilter(odataFilter: string | Token, options: SqlOptions): TypeOrmVisitor {
   options.type = SQLLang.Oracle;

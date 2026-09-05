@@ -1,5 +1,5 @@
 /**
- * Специализация посетителя `odata-v4-sql` для совместимости с TypeORM QueryBuilder.
+ * @file Специализация посетителя `odata-v4-sql` для совместимости с TypeORM QueryBuilder.
  *
  * Базовый класс `Visitor` при обходе AST OData накапливает строковые фрагменты SQL (`where`, `select`,
  * `orderby`), лимиты/смещения и `Map` параметров. Этот класс дополняет поведение:
@@ -11,7 +11,17 @@
  * - частичная поддержка строковых функций OData (`contains`, `startswith`, …) в `WHERE`.
  *
  * Диалект SQL жёстко выравнивается на Oracle-стиль (`FETCH NEXT`, `OFFSET … ROWS`) в конструкторе
- * и в фабричных функциях `createQuery` / `createFilter`.
+ * и в фабричных функциях `createQuery` / `createFilter`. Выбор именно Oracle не связан с СУБД
+ * пользователя: он выбран потому, что `Visitor.asOracleSql()` переписывает позиционные плейсхолдеры
+ * `?` в именованные `:pN`, а именно именованные параметры понимает TypeORM QueryBuilder.
+ *
+ * ВАЖНО (жизненный цикл объекта). Результат обхода корректен только после вызова `asType()` —
+ * его делают `createQuery` / `createFilter`. До `asType()` в `where` могут оставаться `?`
+ * (см. `VisitMethodCallExpression`). Если конструировать посетитель вручную, `asType()` вызывать
+ * обязательно.
+ *
+ * Известные ограничения этого класса задокументированы у соответствующих методов и сведены
+ * в `docs/audit.md` (раздел «Дефекты»).
  */
 import { Literal } from 'odata-v4-literal';
 import { type Token, TokenType } from 'odata-v4-parser/lib/lexer';
@@ -21,9 +31,16 @@ import type { ObjectLiteral } from 'typeorm';
 import type { SqlOptions } from '../types';
 
 /**
- * Контекст обхода: в какое строковое поле посетителя (`where` | `select` | …) дописывать фрагменты,
- * как называется текущий идентификатор (для пост-обработки NULL-сравнений) и какое значение литерала
- * было разобрано последним.
+ * Контекст обхода AST, который передаётся сверху вниз по рекурсии `Visit`.
+ *
+ * @property target - имя строкового поля посетителя (`'where'` | `'select'` | `'orderby'`),
+ *   в которое текущая ветка дописывает SQL. Обращение к нему динамическое (`this[context.target]`),
+ *   поэтому в коде стоят точечные `@ts-ignore`.
+ * @property identifier - последний разобранный идентификатор. Используется двояко:
+ *   как маркер «мы внутри цепочки `a/b/c`» (значение заканчивается на `.`) и как подстановка
+ *   в регулярные выражения пост-обработки `IS NULL` / `IS NOT NULL`.
+ * @property literal - значение последнего литерала. `null`/`undefined` здесь означает
+ *   «в OData было написано `null`», что и запускает замену `= :pN` → `IS NULL`.
  */
 interface Context extends ObjectLiteral {
   target: string;
@@ -32,9 +49,18 @@ interface Context extends ObjectLiteral {
 }
 
 export class TypeOrmVisitor extends Visitor {
-  /** Дочерние посетители для каждого сегмента `$expand` (связь + собственный SELECT/WHERE/ORDER). */
+  /**
+   * Дочерние посетители — по одному на каждый сегмент `$expand` (связь + собственный SELECT/WHERE/ORDER).
+   * Заполняется в {@link TypeOrmVisitor.VisitExpand} и в {@link TypeOrmVisitor.VisitPropertyPathExpression}
+   * (для «виртуальных» JOIN-ов, нужных фильтру по пути `связь/поле`).
+   * Дальше это дерево разворачивается в цепочку `leftJoin` в `processIncludes`.
+   */
   public includes: TypeOrmVisitor[] = [];
-  /** Алиас таблицы/подзапроса для этой ветки AST (корень или имя навигации). */
+  /**
+   * SQL-алиас таблицы для этой ветки AST.
+   * Для корня — значение `options.alias`; для ветки `$expand` — `<путь><позиция в исходной строке>`
+   * (например `posts8`), что делает алиас уникальным при нескольких expand одной и той же связи.
+   */
   public alias = '';
 
   /**
@@ -47,6 +73,8 @@ export class TypeOrmVisitor extends Visitor {
   constructor(options: SqlOptions) {
     super(options);
 
+    // Диалект фиксируем здесь, а не берём из options: от него зависит формат плейсхолдеров,
+    // который переписывает asType() (см. заголовок файла).
     this.type = SQLLang.Oracle;
     this.alias = options.alias || this.alias;
   }
@@ -54,6 +82,13 @@ export class TypeOrmVisitor extends Visitor {
   /**
    * Собирает полный SQL SELECT (наследие базового API посетителя): список полей, WHERE, ORDER BY,
    * и при необходимости Oracle-стиль пагинации OFFSET/FETCH.
+   *
+   * В сценарии с TypeORM этот метод не используется — QueryBuilder собирает SQL сам из
+   * `select` / `where` / `parameters`. `from()` нужен для «сырого» сценария (`createFilter` + драйвер БД,
+   * см. `src/example/sql.ts`).
+   *
+   * @param table - имя таблицы; подставляется в SQL как есть, без экранирования, поэтому
+   *   передавать сюда пользовательский ввод нельзя.
    */
   from(table: string) {
     let sql = `SELECT ${this.select} FROM ${table} WHERE ${this.where} ORDER BY ${this.orderby}`;
@@ -87,8 +122,18 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * `$expand`: для каждого элемента списка находим или создаём вложенный `TypeOrmVisitor` с уникальным
-   * ключом `navigationProperty` (путь + позиция в AST), синхронизируем счётчик параметров и обходим ветку.
+   * `$expand`: для каждого элемента списка создаётся вложенный `TypeOrmVisitor`, обходящий свою ветку
+   * AST независимо (свои `select` / `where` / `orderby`).
+   *
+   * `parameterSeed` передаётся в дочерний посетитель и забирается обратно, чтобы сквозная нумерация
+   * `:p0, :p1, …` не пересекалась между корнем и вложенными ветками.
+   *
+   * Алиас дочерней ветки — `<путь><позиция>` (`posts8`), а вот `navigationProperty` базовый
+   * `VisitExpandItem` выставит равным чистому пути (`posts`).
+   *
+   * ВНИМАНИЕ: проверка на переиспользование сравнивает `navigationProperty` (`'posts'`) с `expandPath`
+   * (`'posts8'`), поэтому она никогда не срабатывает — повторный `$expand` одной и той же связи
+   * даёт два независимых include и два `LEFT JOIN`. См. `docs/audit.md`, дефект A-04.
    */
   protected VisitExpand(node: Token) {
     node.value.items.forEach((item: Token) => {
@@ -109,7 +154,17 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * Один элемент `$select`: поддержка `Nav/Field` (через связанный include) и обычных имён с `/` → `.`.
+   * Один элемент `$select`.
+   *
+   * Две ветки:
+   * 1. `Nav/Field` — ищем уже созданный include по `navigationProperty` и берём его реальный
+   *    JOIN-алиас (`posts8.title`). Если include не найден (не было `$expand`), алиасом становится
+   *    само имя связи — такой SQL валиден только если TypeORM действительно заджойнил её под этим именем.
+   * 2. Обычное поле — префиксуется корневым алиасом через `getIdentifier`.
+   *
+   * Первый `if` дописывает разделитель `', '`, второй (внутри ветки 2) — ещё и `','`; для одиночных
+   * и множественных `$select` результат совпадает с ожиданиями тестов, но код дублирует логику
+   * разделителя. См. `docs/roadmap.md`, задача R-29.
    */
   protected VisitSelectItem(node: Token, context: Context) {
     if (this.select !== '' && !this.select.trim().endsWith(',')) {
@@ -140,9 +195,20 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * Цепочка свойств в выражении (например `Author/Name`). В контексте `where` первая часть может быть
-   * навигацией: тогда гарантируется наличие соответствующего include-посетителя; если expand в запросе
-   * не было, создаётся «технический» include с пустым SELECT и тривиальным WHERE `1 = 1` только ради JOIN.
+   * Цепочка свойств в выражении (например `Author/Name`).
+   *
+   * В контексте `where` первая часть пути может быть навигацией, и тогда для неё нужен JOIN.
+   * Если `$expand` этой связи в запросе не было, создаётся «технический» include: `select = ''`
+   * (колонки связи в выборку не попадают) и `where = '1 = 1'` (JOIN без дополнительного условия).
+   *
+   * ВНИМАНИЕ: имя JOIN-алиаса, которое подставляется в WHERE, — это чистое имя связи (`posts.title`),
+   * тогда как `VisitExpand` создаёт алиас с позицией (`posts8`). Поэтому комбинация
+   * `$expand=posts&$filter=posts/title eq '…'` даёт ссылку на несуществующий алиас и ошибку СУБД.
+   * См. `docs/audit.md`, дефект A-02.
+   *
+   * Вторая половина метода — собственно обход: для составного пути рекурсивно посещаются `current`
+   * и `next`, а между ними в `context.identifier` дописывается `'.'` — этот суффикс служит сигналом
+   * для `getIdentifier` / `VisitODataIdentifier`, что корневой алиас подставлять уже не нужно.
    */
   protected VisitPropertyPathExpression(node: Token, context: Context) {
     if (context.target === 'where' && node.value.current) {
@@ -177,7 +243,11 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * Имя поля или `NULL`: дописывает идентификатор в активный фрагмент (`context.target`) с учётом алиаса.
+   * Имя поля или литерал `NULL`: дописывает идентификатор в активный фрагмент (`context.target`).
+   *
+   * Ключевой момент — `NULL` в OData приходит сюда как обычный идентификатор с именем `'NULL'`,
+   * поэтому его нельзя префиксовать алиасом (`u.NULL`); он пишется как есть, а превращением
+   * `= NULL` → `IS NULL` занимаются `VisitEqualsExpression` / `VisitNotEqualsExpression`.
    */
   protected VisitODataIdentifier(node: Token, context: Context) {
     if (context.identifier && context.identifier.endsWith('.')) {
@@ -199,8 +269,19 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * Префикс колонки: для корня — `this.alias.`, для цепочки после точки — подстановка алиаса связи
-   * вместо корневого алиаса через `replace` накопленной строки.
+   * Возвращает идентификатор колонки с нужным префиксом.
+   *
+   * Два режима:
+   * - контекста нет либо предыдущий идентификатор не заканчивается на `'.'` → это первое звено пути,
+   *   префиксуем корневым алиасом: `id` → `u.id`;
+   * - предыдущий идентификатор заканчивается на `'.'` → мы внутри цепочки `Profile/Age`. К этому моменту
+   *   в накопленную строку уже попало `u.Profile.`, что неверно: `Profile` — это JOIN-алиас, а не колонка
+   *   таблицы `u`. Поэтому выполняется ретроактивная правка уже записанного фрагмента —
+   *   `u.Profile.` заменяется на `Profile.`, — а сам идентификатор возвращается без префикса.
+   *
+   * Ретроактивный `replace` по регулярному выражению — самое хрупкое место класса: `context.identifier`
+   * попадает в `RegExp` без экранирования, а `.` в шаблоне трактуется как «любой символ».
+   * См. `docs/roadmap.md`, задача R-26.
    */
   private getIdentifier(originalIdentifier: string, context: Context) {
     let alias = '';
@@ -219,8 +300,14 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * Равенство: после обхода левой и правой частей превращает сравнение с NULL в `IS NULL`
-   * (и симметричный вариант для параметра слева).
+   * Равенство `eq`.
+   *
+   * Сначала обычная генерация `<left> = <right>`, затем пост-обработка: SQL-семантика требует
+   * `IS NULL` вместо `= NULL`, а к моменту обхода правой части мы уже не знаем, будет ли там `null`.
+   * Поэтому признак «справа был null» берётся из `context.literal`, выставленного в `VisitLiteral`,
+   * и уже готовый хвост строки `where` переписывается регулярным выражением.
+   *
+   * Два зеркальных `replace` покрывают оба порядка операндов (`field eq null` и `null eq field`).
    */
   protected VisitEqualsExpression(node: Token, context: Context) {
     this.Visit(node.value.left, context);
@@ -241,7 +328,8 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * Неравенство: аналогично `VisitEqualsExpression`, но для `IS NOT NULL`.
+   * Неравенство `ne` — полный аналог {@link TypeOrmVisitor.VisitEqualsExpression},
+   * но с оператором `<>` и заменой на `IS NOT NULL`.
    */
   protected VisitNotEqualsExpression(node: Token, context: Context) {
     this.Visit(node.value.left, context);
@@ -265,7 +353,19 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * Литерал в выражении: либо плейсхолдер `:pN` + запись в `parameters`, либо inline SQL-литерал.
+   * Литерал в выражении.
+   *
+   * При `useParameters` (значение по умолчанию в базовом `Visitor`) значение не попадает в SQL:
+   * в строку пишется именованный плейсхолдер `:pN`, а само значение кладётся в `parameters`.
+   * Именно это делает фильтры устойчивыми к SQL-инъекциям.
+   *
+   * `context.literal` выставляется всегда — в том числе в `null`, когда в OData было написано `null`.
+   * По этому признаку `VisitEqualsExpression` отличает `field eq null` от `field eq :pN`.
+   * Значение `null` в `parameters` намеренно не кладётся: оно всё равно будет вырезано из SQL
+   * заменой на `IS NULL`.
+   *
+   * Без `useParameters` литерал инлайнится в SQL через `SQLLiteral.convert` — режим для отладки
+   * и для генерации «сырых» запросов, но не для пользовательского ввода.
    */
   protected VisitLiteral(node: Token, context: Context) {
     if (this.options.useParameters) {
@@ -283,9 +383,33 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   /**
-   * Встроенные функции OData в фильтрах. Ветки `contains`/`startswith`/`endswith` формируют `LIKE`;
-   * при `useParameters` в Map кладутся строки с `%`, а в SQL остаётся `like ?` (ожидается подстановка драйвером).
-   * Остальные case-ы — прямые SQL-аналоги (`ROUND`, `LOWER`, дата/время и т.д.).
+   * Встроенные функции OData в фильтрах.
+   *
+   * Ветки `contains` / `startswith` / `endswith` собирают `LIKE`: шаблон с `%` кладётся в `parameters`
+   * (то есть пользовательская строка не инлайнится в SQL), а в `where` пишется позиционный
+   * плейсхолдер `?`. Позже `asType()` → `Visitor.asOracleSql()` меняет все `?` на именованные `:pN`,
+   * которые понимает TypeORM.
+   *
+   * ДЕФЕКТ (A-01, см. `docs/audit.md`). `asOracleSql()` нумерует `?` подряд с начала `parameters`,
+   * не зная, что `VisitLiteral` в этом классе уже записал часть плейсхолдеров именованными.
+   * Из-за этого при смешивании обычного сравнения и LIKE имена разъезжаются:
+   *
+   *   $filter=name eq 'x' and contains(title,'y')
+   *     → where  : u.name = :p0 AND u.title like :p0   // должно быть :p1
+   *     → params : { p0: 'x', p1: '%y%' }
+   *
+   * Запрос при этом не падает — он молча возвращает не те строки. Лечится переходом на `:${name}`
+   * вместо `?` в трёх ветках ниже (тогда `asOracleSql` просто не найдёт что заменять).
+   *
+   * Остальные case-ы — прямая трансляция в SQL-функции. Обратите внимание, что часть имён
+   * не переносима между СУБД: `LEN` для `length` есть в MS SQL, но не в PostgreSQL/SQLite
+   * (там `LENGTH`), `NOW()` отсутствует в MS SQL и SQLite. Ветвление по `this.type` сделано только
+   * для `indexof`, и оно недостижимо: конструктор жёстко ставит `SQLLang.Oracle`, поэтому
+   * `CHARINDEX` не выбирается никогда. См. `docs/audit.md`, дефект A-06.
+   *
+   * Не реализованы (узел просто ничего не допишет в `where`, что даёт синтаксически битый SQL):
+   * `substring`, `concat`, `replace`, `date`, `time`, `totaloffsetminutes`, `mindatetime`,
+   * `maxdatetime`, `fractionalseconds`, `cast`, `isof`, геопространственные функции.
    */
   protected VisitMethodCallExpression(node: Token, context: Context) {
     const method = node.value.method;

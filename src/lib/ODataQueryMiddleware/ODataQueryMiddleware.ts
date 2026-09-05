@@ -1,6 +1,10 @@
 /**
- * Express-middleware: читает OData-параметры из `req.query`, выполняет запрос через TypeORM
- * и отвечает JSON-ом. Ошибки логируются и маскируются как 500 с кратким телом ответа.
+ * @file Express-middleware: читает OData-параметры из `req.query`, выполняет запрос через TypeORM
+ * и отвечает JSON-ом.
+ *
+ * Несмотря на название, это не промежуточный обработчик, а конечный: он сам отправляет ответ
+ * и не передаёт управление дальше по цепочке (хотя `next()` и вызывается — см. ниже).
+ * Ставить его нужно последним в маршруте.
  */
 import type { Request, Response, NextFunction } from 'express';
 import type { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
@@ -10,9 +14,14 @@ import type { QueryParams } from '../types';
 
 /** Настройки middleware: опциональный логгер ошибок и алиас корня для QueryBuilder. */
 interface ODataQueryMiddlewareSettings {
+  /**
+   * Куда писать ошибки выполнения. Интерфейс намеренно минимальный (только `error`),
+   * чтобы подходили и `console`, и pino/winston, и NestJS-логгер. По умолчанию — `console`.
+   */
   logger?: {
     error: (text: string, ...args: unknown[]) => void;
   };
+  /** Алиас корневой сущности; должен совпадать с именем сущности или её таблицы. */
   alias?: string;
 }
 
@@ -20,12 +29,27 @@ interface ODataQueryMiddlewareSettings {
  * Фабрика middleware для маршрута Express.
  *
  * @param repositoryOrQueryBuilder - либо `Repository` (будет создан `createQueryBuilder(alias)`),
- *   либо уже настроенный `SelectQueryBuilder`.
- * @param settings - `alias` пробрасывается в `executeQuery`; при ошибке вызывается `logger.error`, иначе `console.error`.
+ *   либо уже настроенный `SelectQueryBuilder`. Объект захватывается замыканием один раз,
+ *   поэтому ограничения, зависящие от конкретного запроса (текущий пользователь, тенант),
+ *   так задать нельзя — для них нужен собственный обработчик поверх `executeQuery`.
+ * @param settings - `alias` пробрасывается в `executeQuery`; при ошибке вызывается
+ *   `settings.logger.error`, иначе `console.error`.
  * @returns async handler `(req, res, next)`.
  *
- * Поведение ответа: при успехе — `200` и тело результата `executeQuery` (массив или `{ items, count }`);
- * при исключении — `500` с сообщением; после ветвления всегда вызывается `next()` (в т.ч. после отправки ответа).
+ * @remarks Поведение ответа:
+ * - успех → `200` и тело результата `executeQuery` (массив либо `{ items, count }`);
+ * - исключение → `500` с телом `{ message, error: { message } }`.
+ *
+ * Два известных изъяна обработки ошибок:
+ * 1. Любая ошибка становится `500`, включая заведомо клиентские — синтаксически неверный `$filter`
+ *    или несуществующая колонка. Правильнее отдавать `400`.
+ * 2. Наружу отдаётся `e.message`. Для `QueryFailedError` из TypeORM это текст ошибки СУБД,
+ *    раскрывающий имена таблиц и колонок. См. `docs/audit.md`, дефект A-07.
+ *
+ * `next()` вызывается всегда, в том числе после уже отправленного ответа. Express такой вызов
+ * переживает (следующие обработчики упрутся в `res.headersSent`), но полагаться на это не стоит:
+ * если после этого маршрута стоит ещё один обработчик, он получит управление на завершённом ответе.
+ * См. `docs/roadmap.md`, задача R-28.
  */
 export function ODataQueryMiddleware<T extends ObjectLiteral = ObjectLiteral>(
   repositoryOrQueryBuilder: Repository<T> | SelectQueryBuilder<T>,
@@ -58,6 +82,7 @@ export function ODataQueryMiddleware<T extends ObjectLiteral = ObjectLiteral>(
       });
     }
 
+    // Вызывается и после успеха, и после ошибки — ответ к этому моменту уже отправлен.
     return next();
   };
 }
