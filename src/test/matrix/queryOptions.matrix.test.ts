@@ -301,3 +301,165 @@ describe('комбинации опций', () => {
     expect(result[0].books).toHaveLength(2);
   });
 });
+
+/**
+ * Вложенная пагинация внутри `$expand`.
+ *
+ * Раньше `$expand=books($top=1)` разбирался, но `limit` / `skip` дочернего посетителя нигде
+ * не читались — возвращались все связанные записи. Молчаливое расхождение с запросом:
+ * клиент просил одну книгу, получал все.
+ *
+ * Срез делается после запроса, над деревом сущностей: ограничить число связанных строк
+ * на каждого родителя одним SQL-запросом с `LEFT JOIN` нельзя.
+ */
+describe('$expand — вложенная пагинация', () => {
+  it('вложенный $top ограничивает число связанных записей', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($top=1;$orderby=id asc)', $filter: "name eq 'Ada'" },
+      'Author'
+    );
+
+    expect(result[0].books.map((b) => b.id)).toEqual([1]);
+  });
+
+  it('вложенный $skip пропускает начало коллекции', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($skip=1;$orderby=id asc)', $filter: "name eq 'Ada'" },
+      'Author'
+    );
+
+    expect(result[0].books.map((b) => b.id)).toEqual([2]);
+  });
+
+  it('вложенные $top и $skip работают вместе', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($top=1;$skip=1;$orderby=id asc)', $filter: "name eq 'Ada'" },
+      'Author'
+    );
+
+    expect(result[0].books.map((b) => b.id)).toEqual([2]);
+  });
+
+  it('вложенный $top=0 даёт пустую коллекцию', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($top=0)', $filter: "name eq 'Ada'" },
+      'Author'
+    );
+
+    expect(result[0].books).toEqual([]);
+  });
+
+  it('срез применяется к каждому родителю независимо', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($top=1;$orderby=id asc)', $orderby: 'id asc' },
+      'Author'
+    );
+
+    // У Ada две книги, у Grace и Alan по одной, у Barbara ни одной.
+    expect(result.map((a) => a.books.length)).toEqual([1, 1, 1, 0]);
+  });
+
+  it('вложенный $orderby применяется до среза', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($top=1;$orderby=id desc)', $filter: "name eq 'Ada'" },
+      'Author'
+    );
+
+    // При сортировке по убыванию первой оказывается вторая книга
+    expect(result[0].books.map((b) => b.id)).toEqual([2]);
+  });
+
+  it('срез работает на втором уровне вложенности', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($expand=reviews($top=1;$orderby=id asc))', $filter: "name eq 'Ada'" },
+      'Author'
+    );
+
+    const firstBook = result[0].books.find((b) => b.id === 1);
+
+    // У первой книги два отзыва, остаться должен один
+    expect(firstBook?.reviews.map((r) => r.id)).toEqual([1]);
+  });
+
+  it('связь без ограничений возвращается целиком', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books', $filter: "name eq 'Ada'" },
+      'Author'
+    );
+
+    expect(result[0].books).toHaveLength(2);
+  });
+
+  it('$count считает корневые сущности, а не связанные', async () => {
+    const result = await executeQuery(
+      dataSource.getRepository(Author),
+      { $expand: 'books($top=1)', $count: 'true' },
+      { alias: 'Author' }
+    );
+
+    expect((result as { count: number }).count).toBe(4);
+  });
+});
+
+/**
+ * Дефект A-14: сортировка связи попадала в `ORDER BY` раньше корневой и начинала
+ * управлять порядком корневых строк.
+ *
+ * Результат запроса с `LEFT JOIN` плоский, поэтому очерёдность выражений в `ORDER BY`
+ * определяет всё. `processIncludes` вызывался до применения корневого `$orderby`,
+ * и авторы без книг всплывали наверх — у них значение поля связи NULL.
+ */
+describe('приоритет сортировки при $expand', () => {
+  it('корневой $orderby главнее сортировки связи', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($orderby=id asc)', $orderby: 'id asc' },
+      'Author'
+    );
+
+    expect(result.map((a) => a.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('автор без связанных записей не всплывает наверх', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($orderby=id asc)', $orderby: 'id asc' },
+      'Author'
+    );
+
+    // Barbara (id 4) книг не имеет и обязана остаться последней
+    expect(result[result.length - 1].id).toBe(4);
+    expect(result[result.length - 1].books).toEqual([]);
+  });
+
+  it('сортировка связи по-прежнему упорядочивает записи внутри родителя', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($orderby=id desc)', $orderby: 'id asc' },
+      'Author'
+    );
+
+    expect(result[0].id).toBe(1);
+    expect(result[0].books.map((b) => b.id)).toEqual([2, 1]);
+  });
+
+  it('обе сортировки работают вместе со срезом связи', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($orderby=id desc;$top=1)', $orderby: 'id desc' },
+      'Author'
+    );
+
+    expect(result.map((a) => a.id)).toEqual([4, 3, 2, 1]);
+    // У Ada из двух книг остаётся последняя по возрастанию id
+    expect(result[result.length - 1].books.map((b) => b.id)).toEqual([2]);
+  });
+});

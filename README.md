@@ -104,7 +104,7 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc"
 | `$orderby` | ✅ | `$orderby=name desc,id asc` |
 | `$top` / `$skip` | ✅ | `$top=20&$skip=40` |
 | `$count` | ⚠️ | `$count=false` — **включён по умолчанию**, отступление от спецификации |
-| `$expand` | ⚠️ | `$expand=posts($select=id,title)` — вложенные `$top`/`$skip` игнорируются |
+| `$expand` | ⚠️ | `$expand=posts($select=id,title;$top=2)` — вложенный срез делается после запроса, не в SQL |
 | `$search` | ⚠️ | `$search=alice` — упрощённая семантика, только корневая сущность |
 
 В `$filter` поддержаны все операторы сравнения, логика (`and` / `or` / `not` / скобки),
@@ -289,6 +289,7 @@ GET /api/users?$filter=length(name) gt 3
 GET /api/users?$expand=posts
 GET /api/users?$expand=posts($select=id,title)
 GET /api/users?$expand=posts($orderby=id desc)
+GET /api/users?$expand=posts($orderby=id desc;$top=3)   # по три последних поста на пользователя
 GET /api/users?$expand=posts($expand=comments)
 
 # Фильтр по полю связи (без одновременного $expand той же связи)
@@ -413,8 +414,12 @@ GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
 ```
 
 **Не поддерживается:** `in`, лямбды `any` / `all`, `replace`, `cast`, геопространственные
-функции, `$apply`, `$compute`, `$levels`, `$skiptoken`, вложенные `$top` / `$skip`
-внутри `$expand`. Все эти случаи отвергаются явной ошибкой, а не выполняются частично.
+функции, `$apply`, `$compute`, `$levels`, `$skiptoken`. Все эти случаи отвергаются явной
+ошибкой, а не выполняются частично.
+
+**Вложенные `$top` / `$skip` внутри `$expand`** работают, но срез применяется после запроса:
+связанные записи приходят из базы целиком. На связях с тысячами записей на родителя это
+заметно — см. [docs/odata-support.md](./docs/odata-support.md#вложенные-top-и-skip).
 
 **Белые списки выключены по умолчанию.** Без `allowedFields` / `allowedExpands` клиент
 видит любое поле сущности и любую связь — см. раздел выше.

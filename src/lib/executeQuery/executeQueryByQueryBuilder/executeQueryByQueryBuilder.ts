@@ -9,6 +9,8 @@
  * 3. `createQuery` — строка → AST → `TypeOrmVisitor` с SQL-фрагментами и деревом `includes` для `$expand`.
  * 4. По метаданным сущности формируется список колонок SELECT, накладываются WHERE/параметры, JOIN-ы,
  *    сортировка, затем опционально `$search`, пагинация и либо `getMany`, либо `getManyAndCount`.
+ * 5. `applyNestedPagination` — срез вложенных `$top` / `$skip` уже над деревом сущностей:
+ *    в SQL ограничить число связанных строк на каждого родителя одним запросом нельзя.
  *
  * Порядок шагов 3–4 важен: `$expand` должен быть разобран раньше `$filter`, иначе фильтр по пути
  * `связь/поле` не найдёт JOIN-алиас. За это отвечает `TypeOrmVisitor.queryOptionsSort`.
@@ -18,6 +20,7 @@ import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm'
 import { createQuery } from '../../createQuery';
 import { ODataInvalidQueryError } from '../../errors';
 import type { TypeOrmVisitor } from '../../TypeOrmVisitor';
+import { applyNestedPagination } from '../applyNestedPagination';
 import type { QueryParams } from '../../types';
 import { mapToObject } from '../mapToObject';
 import { processIncludes } from '../processIncludes';
@@ -277,9 +280,14 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
     .andWhere(odataQuery.where)
     .setParameters(mapToObject(odataQuery.parameters));
 
-  // Разворачиваем дерево includes в LEFT JOIN'ы ($expand).
-  queryBuilder = processIncludes<T>(queryBuilder, odataQuery, alias, metadata);
-
+  // ПОРЯДОК ВАЖЕН: корневая сортировка добавляется ДО processIncludes.
+  //
+  // `addOrderBy` дописывает выражения в конец `ORDER BY`, а результат запроса с `LEFT JOIN`
+  // плоский: сортировка связи, оказавшись первой, начинает управлять порядком корневых строк.
+  // Раньше processIncludes шёл раньше, и `$expand=books($orderby=id)&$orderby=id` давал
+  // `ORDER BY Author_books.id, Author.id` — авторы без книг всплывали наверх (у них NULL),
+  // то есть корневой `$orderby` переставал работать. См. `docs/audit.md`, дефект A-14.
+  //
   // '1' — значение orderby по умолчанию у базового посетителя (SQL `ORDER BY 1`),
   // здесь оно трактуется как «$orderby не задан».
   if (odataQuery.orderby && odataQuery.orderby !== '1') {
@@ -294,6 +302,10 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
       queryBuilder = queryBuilder.addOrderBy(field, order as 'ASC' | 'DESC');
     });
   }
+
+  // Разворачиваем дерево includes в LEFT JOIN'ы ($expand); сортировки связей допишутся
+  // после корневой и будут упорядочивать записи внутри каждого родителя.
+  queryBuilder = processIncludes<T>(queryBuilder, odataQuery, alias, metadata);
 
   // $search: регистронезависимый LIKE по текстовым колонкам + точное равенство по числовым.
   // processSearch мутирует queryBuilder на месте и ничего не возвращает.
@@ -320,10 +332,11 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
     const resultData = await queryBuilder.getManyAndCount();
 
     return {
-      items: resultData[0],
+      // count считает корневые сущности и вложенной пагинацией не затрагивается.
+      items: applyNestedPagination(resultData[0], odataQuery.includes),
       count: resultData[1],
     };
   }
 
-  return queryBuilder.getMany();
+  return applyNestedPagination(await queryBuilder.getMany(), odataQuery.includes);
 };
