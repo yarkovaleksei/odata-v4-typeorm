@@ -27,6 +27,15 @@ import type { ExecuteQueryOptions, GetManyResponse } from '../types';
 import { parseQueryParams } from './parseQueryParams';
 
 /**
+ * Метаданные одной колонки.
+ *
+ * Тип выводится из `EntityMetadata`, а не импортируется по пути
+ * `typeorm/metadata/ColumnMetadata`: карта `exports` в TypeORM не публикует внутренние
+ * модули, и такой импорт не разрешается.
+ */
+type ColumnMetadata = EntityMetadata['columns'][number];
+
+/**
  * Метаданные корневой сущности.
  *
  * Основной путь — взять их у самого построителя. Это снимает давнее ограничение, при котором
@@ -48,6 +57,59 @@ function resolveMetadata<T extends ObjectLiteral>(
   }
 
   return queryBuilder.connection.getMetadata(alias);
+}
+
+/**
+ * Находит метаданные колонки по пути свойства, проходя по связям.
+ *
+ * @param metadata - метаданные корневой сущности.
+ * @param path - путь вида `'name'` либо `'books/reviews/score'`.
+ * @returns метаданные колонки; `undefined`, если путь ведёт к связи, а не к колонке,
+ *   либо не существует вовсе (последнее не ошибка на этом уровне — несуществующее имя
+ *   отсеет сама СУБД).
+ */
+function findColumn(metadata: EntityMetadata, path: string): ColumnMetadata | undefined {
+  const segments = path.split('/');
+  const field = segments.pop() as string;
+
+  let current = metadata;
+
+  for (const navigation of segments) {
+    const relation = current.relations.find((r) => r.propertyPath === navigation);
+
+    if (!relation) {
+      return undefined;
+    }
+
+    current = relation.inverseEntityMetadata;
+  }
+
+  return current.columns.find((column) => column.propertyPath === field);
+}
+
+/**
+ * Запрещает обращаться к колонкам, помеченным `@Column({ select: false })`.
+ *
+ * Такая пометка — способ TypeORM сказать «эта колонка не покидает сервер по умолчанию»;
+ * типовое применение — хеши паролей и токены. Собственный `find()` в TypeORM их скрывает,
+ * а эта библиотека раньше возвращала их **на каждом запросе**, потому что строила список
+ * SELECT из всех невиртуальных колонок и тем самым явно переопределяла умолчание TypeORM.
+ * См. `docs/audit.md`, дефект A-12.
+ *
+ * Проверяются все упоминания — `$select`, `$filter` и `$orderby`: фильтр по скрытой колонке
+ * не возвращает её значение, но работает как оракул для подбора (`passwordHash eq '…'`
+ * отвечает разным числом строк).
+ *
+ * @throws {ODataInvalidQueryError} если запрос обращается к невыбираемой колонке.
+ */
+function assertNoHiddenFields(odataQuery: TypeOrmVisitor, metadata: EntityMetadata): void {
+  const hidden = odataQuery
+    .collectReferencedFields()
+    .filter((path) => findColumn(metadata, path)?.isSelect === false);
+
+  if (hidden.length) {
+    throw new ODataInvalidQueryError('$select', `field is not selectable: ${hidden.join(', ')}`);
+  }
 }
 
 /**
@@ -177,9 +239,11 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // Белые списки сверяем сразу после компиляции — до того, как что-либо попадёт в SQL.
   assertAllowed(odataQuery, allowedFields, allowedExpands);
 
-  // Метаданные сущности нужны для двух вещей: списка колонок SELECT по умолчанию
-  // и разрешения связей при обработке $expand.
+  // Метаданные сущности нужны для трёх вещей: списка колонок SELECT по умолчанию,
+  // разрешения связей при обработке $expand и проверки невыбираемых колонок.
   const metadata = resolveMetadata(inputQueryBuilder, alias);
+
+  assertNoHiddenFields(odataQuery, metadata);
 
   let queryBuilder = inputQueryBuilder;
   let rootSelect: string[];
@@ -189,9 +253,15 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // класса TypeOrmVisitor с собственными полями, пустым он не бывает. Реально работает вторая
   // половина: `select === '*'` — это значение базового посетителя, означающее «$select не задан».
   if (Object.keys(odataQuery).length === 0 || odataQuery.select === '*') {
-    // $select не задан: берём все невиртуальные колонки корня.
+    // $select не задан: берём все невыбираемые-по-умолчанию колонки корня.
+    //
     // nonVirtualColumns исключает вычисляемые поля (@VirtualColumn), для которых нет столбца в БД.
-    rootSelect = metadata.nonVirtualColumns.map((x) => `${alias}.${x.propertyPath}`);
+    // Фильтр по isSelect исключает колонки с `@Column({ select: false })` — без него список
+    // передавался в .select() целиком и явно переопределял умолчание TypeORM, из-за чего
+    // хеш пароля возвращался в каждом ответе (дефект A-12).
+    rootSelect = metadata.nonVirtualColumns
+      .filter((column) => column.isSelect)
+      .map((x) => `${alias}.${x.propertyPath}`);
   } else {
     // $select задан: посетитель уже вернул поля с префиксом алиаса ('user.id, user.name'),
     // поэтому здесь только разбиение и обрезка пробелов.

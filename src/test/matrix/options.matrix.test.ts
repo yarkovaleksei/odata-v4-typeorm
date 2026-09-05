@@ -4,8 +4,14 @@
  * Проверяется на реальной БД, потому что все три возможности касаются стыка с TypeORM:
  * метаданных построителя, экранирования идентификаторов и итогового SQL.
  */
-import { DataSource, DefaultNamingStrategy, type NamingStrategyInterface } from 'typeorm';
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  DataSource,
+  DefaultNamingStrategy,
+  Entity,
+  PrimaryGeneratedColumn,
+  type NamingStrategyInterface,
+} from 'typeorm';
 
 import {
   executeQuery,
@@ -385,5 +391,85 @@ describe('$search при нестандартной namingStrategy', () => {
     );
 
     expect((result as { items: Account[] }).items).toHaveLength(1);
+  });
+});
+
+/**
+ * Дефект A-12: колонки с `@Column({ select: false })` возвращались клиенту.
+ *
+ * Такая пометка — способ TypeORM сказать «эта колонка не покидает сервер по умолчанию»;
+ * типовое применение — хеши паролей и токены. Собственный `find()` в TypeORM их скрывает,
+ * а библиотека возвращала их **на каждом запросе**, даже без единого параметра, потому что
+ * строила список SELECT из всех невиртуальных колонок и явно переопределяла умолчание TypeORM.
+ */
+describe('колонки с select: false', () => {
+  @Entity()
+  class Credential {
+    @PrimaryGeneratedColumn()
+    id!: number;
+
+    @Column()
+    login!: string;
+
+    @Column({ select: false })
+    passwordHash!: string;
+  }
+
+  let hiddenDataSource: DataSource;
+
+  beforeAll(async () => {
+    hiddenDataSource = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+      synchronize: true,
+      entities: [Credential],
+      logging: false,
+    });
+
+    await hiddenDataSource.initialize();
+  });
+
+  afterAll(async () => {
+    await hiddenDataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await hiddenDataSource.synchronize(true);
+    await hiddenDataSource
+      .getRepository(Credential)
+      .save({ login: 'root', passwordHash: 'SECRET-HASH' });
+  });
+
+  const query = (params: Record<string, string>) =>
+    executeQuery(hiddenDataSource.getRepository(Credential), params, { alias: 'Credential' });
+
+  it('скрытая колонка не попадает в ответ по умолчанию', async () => {
+    const result = (await query({})) as { items: Credential[] };
+
+    expect(result.items[0]).toEqual({ id: 1, login: 'root' });
+    expect(JSON.stringify(result)).not.toContain('SECRET-HASH');
+  });
+
+  it('поведение совпадает с find() самого TypeORM', async () => {
+    const viaLibrary = (await query({})) as { items: Credential[] };
+    const viaTypeorm = await hiddenDataSource.getRepository(Credential).find();
+
+    expect(viaLibrary.items).toEqual(viaTypeorm);
+  });
+
+  it.each([
+    ['$select', { $select: 'id,passwordHash' }],
+    ['$filter', { $filter: "passwordHash eq 'SECRET-HASH'" }],
+    ['$orderby', { $orderby: 'passwordHash asc' }],
+  ])('обращение к скрытой колонке через %s отвергается', async (_name, params) => {
+    // $filter и $orderby не возвращают значение колонки, но работают как оракул:
+    // по числу строк в ответе значение подбирается.
+    await expect(query(params)).rejects.toThrow(ODataInvalidQueryError);
+  });
+
+  it('обычные колонки по-прежнему доступны', async () => {
+    const result = (await query({ $select: 'id,login' })) as { items: Credential[] };
+
+    expect(result.items[0]).toEqual({ id: 1, login: 'root' });
   });
 });

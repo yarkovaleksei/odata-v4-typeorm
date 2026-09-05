@@ -284,6 +284,19 @@ export class TypeOrmVisitor extends Visitor {
     return result;
   }
 
+  /**
+   * Приписывает к имени колонки алиас текущего уровня.
+   *
+   * Пустой алиас — легитимный режим для «сырого» сценария (`createFilter(expr, { alias: '' })`,
+   * запрос к одной таблице без алиаса). Тогда префикс не добавляется вовсе: раньше в этом
+   * случае получалось `.Id = :p0` с ведущей точкой, то есть заведомо невалидный SQL —
+   * ровно в том сценарии, ради которого `createFilter` и существует. См. `docs/audit.md`,
+   * дефект A-13.
+   */
+  private qualify(name: string): string {
+    return this.alias ? `${this.alias}.${name}` : name;
+  }
+
   /** Регистрирует упомянутый путь свойства; повторы отбрасываются. */
   private trackField(path: string): void {
     if (!this.referencedFields.includes(path)) {
@@ -431,7 +444,7 @@ export class TypeOrmVisitor extends Visitor {
       return;
     }
 
-    this.select += `${this.alias}.${node.raw}`;
+    this.select += this.qualify(node.raw);
     context.identifier = node.raw;
   }
 
@@ -511,7 +524,8 @@ export class TypeOrmVisitor extends Visitor {
   private createInclude(navigationProperty: string): TypeOrmVisitor {
     const visitor = new TypeOrmVisitor({
       ...this.options,
-      alias: `${this.alias}_${navigationProperty}`,
+      // Пустой корневой алиас не должен давать ведущее подчёркивание в имени JOIN-алиаса.
+      alias: this.alias ? `${this.alias}_${navigationProperty}` : navigationProperty,
     });
 
     visitor.parameterSeed = this.parameterSeed;
@@ -537,7 +551,7 @@ export class TypeOrmVisitor extends Visitor {
   protected VisitODataIdentifier(node: Token, context: Context) {
     this.trackField(node.value.name);
 
-    this.append(context, `${this.alias}.${node.value.name}`);
+    this.append(context, this.qualify(node.value.name));
 
     context.identifier = node.value.name;
   }

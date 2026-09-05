@@ -32,10 +32,27 @@ describe('executeQueryByQueryBuilder', () => {
       },
     } as unknown as jest.Mocked<SelectQueryBuilder<ObjectLiteral>>;
 
-    // Мок метаданных с не виртуальными колонками
+    // Мок метаданных.
+    // isSelect: true обязателен — колонки с `@Column({ select: false })` исключаются
+    // из выборки по умолчанию, и без этого поля мок дал бы пустой SELECT.
+    // relations нужен для разрешения путей `связь/поле` при проверке скрытых колонок.
     mockMetadata = {
-      nonVirtualColumns: [{ propertyPath: 'id' }, { propertyPath: 'name' }],
-      columns: [{ propertyPath: 'content', type: 'varchar' }],
+      nonVirtualColumns: [
+        { propertyPath: 'id', isSelect: true },
+        { propertyPath: 'name', isSelect: true },
+      ],
+      columns: [
+        { propertyPath: 'id', propertyName: 'id', databaseName: 'id', isSelect: true },
+        { propertyPath: 'name', propertyName: 'name', databaseName: 'name', isSelect: true },
+        {
+          propertyPath: 'content',
+          propertyName: 'content',
+          databaseName: 'content',
+          type: 'varchar',
+          isSelect: true,
+        },
+      ],
+      relations: [],
     } as unknown as EntityMetadata;
     (mockQueryBuilder.connection.getMetadata as ReturnType<typeof jest.fn>).mockReturnValue(
       mockMetadata

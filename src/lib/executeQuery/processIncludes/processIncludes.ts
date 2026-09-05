@@ -51,8 +51,11 @@ export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
 
       if (join === 'leftJoin') {
         // filter(x => x !== '') нужен именно для случая select === '' (JOIN ради условия).
-        // TODO: отбрасывать колонки с isSelect: false — сейчас явный $select может вытащить поле,
-        //   которое сущность помечает как не выбираемое по умолчанию (например, хеш пароля).
+        //
+        // Колонки с `@Column({ select: false })` сюда не доходят: обращение к ним отсекается
+        // раньше, в `assertNoHiddenFields`, вместе с обращениями из `$filter` и `$orderby`.
+        // Ветка `leftJoinAndSelect` (когда вложенный $select не задан) скрывает их сама —
+        // это штатное поведение TypeORM.
         queryBuilder.addSelect(
           item.select
             .split(',')
