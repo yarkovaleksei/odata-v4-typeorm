@@ -92,7 +92,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^26.4.1",
     "@types/pg": "^8.23.1",
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "^12.11.1",
     "eslint": "^10.10.0",
     "eslint-plugin-typeorm-typescript": "^0.5.4",
     "express": "^5.2.1",
