@@ -12,12 +12,17 @@
  *    вызывающий код;
  * 3. `createQuery` / `createFilter` / `TypeOrmVisitor` — только компиляция OData в SQL-фрагменты,
  *    без обращения к БД. Подходит для «сырых» драйверов.
+ *
+ * Отдельно стоит слой схемы: `ODataMetadataMiddleware` и `createMetadataDocument` отдают
+ * документ `$metadata` в CSDL XML. Данных он не касается — описывает модель, по которой
+ * клиенты вроде `ra-data-odata-server` строят интерфейс.
  */
 export * from './TypeOrmVisitor';
 export * from './createFilter';
 export * from './errors';
 export * from './createQuery';
 export * from './executeQuery';
+export * from './metadata';
 export * from './ODataQueryMiddleware';
 export * from './executeQuery/executeQueryByQueryBuilder/parseQueryParams';
 export * from './types';

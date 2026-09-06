@@ -40,23 +40,43 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/posts/$metadata",
+              "raw": "{{base_url}}/api/posts/$schema",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "api",
                 "posts",
-                "$metadata"
+                "$schema"
               ],
               "query": []
             },
-            "description": "Поля и связи — их же подставляет конструктор в подсказки."
+            "description": "Поля и связи — их же подставляет конструктор в подсказки. Формат собственный, поэтому путь $schema, а не $metadata."
           },
           "response": []
         },
         {
           "name": "Схема всех сущностей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/$schema",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "$schema"
+              ],
+              "query": []
+            },
+            "description": "Выжимка для конструктора запросов в JSON. Стандартная схема сервиса лежит на /api/$metadata."
+          },
+          "response": []
+        },
+        {
+          "name": "Схема сервиса ($metadata, CSDL XML)",
           "request": {
             "method": "GET",
             "header": [],
@@ -71,7 +91,7 @@
               ],
               "query": []
             },
-            "description": ""
+            "description": "Стандартный документ OData в CSDL XML: имена наборов, типы полей, связи. Именно его запрашивают ra-data-odata-server, @odata/client и Excel — ответ приходит с Content-Type: application/xml и OData-Version: 4.0."
           },
           "response": []
         },

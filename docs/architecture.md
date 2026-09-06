@@ -22,6 +22,22 @@
 Уровень 3 не зависит от TypeORM по сути (только тип `ObjectLiteral` в сигнатурах) и годится
 для «сырых» драйверов; рецепт с `pg` — в [recipes.md](./recipes.md#без-typeorm-только-компиляция-в-sql).
 
+Особняком стоит слой схемы — он описывает модель, а не выполняет запросы, и потому
+в конвейер не входит вовсе:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ ODataMetadataMiddleware        Express-обработчик $metadata   │
+│ createMetadataDocument         EntityMetadata → CSDL XML      │
+└───────────────────────────────────────────────────────────────┘
+```
+
+Источник данных для него — метаданные TypeORM, а не AST OData, поэтому парсер здесь
+не участвует. Единственная связь с остальной библиотекой смысловая, но обязательная:
+перечень описываемых колонок совпадает с тем, что `executeQueryByQueryBuilder` кладёт
+в `SELECT` по умолчанию. Документ, обещающий поле, которого запрос не вернёт, хуже
+отсутствующего.
+
 ## Конвейер выполнения
 
 ```
@@ -190,5 +206,8 @@ odata-v4-typeorm-improved
 | [src/lib/executeQuery/processSearch/](../src/lib/executeQuery/processSearch/) | `$search` → LIKE / равенство |
 | [src/lib/executeQuery/mapToObject/](../src/lib/executeQuery/mapToObject/) | `Map` параметров → объект |
 | [src/lib/ODataQueryMiddleware/](../src/lib/ODataQueryMiddleware/) | Обработчик Express |
+| [src/lib/metadata/createMetadataDocument/](../src/lib/metadata/createMetadataDocument/) | `EntityMetadata` → документ `$metadata` в CSDL XML |
+| [src/lib/metadata/edmType/](../src/lib/metadata/edmType/) | Типы колонок TypeORM → примитивные типы EDM |
+| [src/lib/metadata/ODataMetadataMiddleware/](../src/lib/metadata/ODataMetadataMiddleware/) | Обработчик Express для маршрута `$metadata` |
 | [src/test/](../src/test/) | Сущности и обвязка для интеграционных тестов |
 | [examples/server/](../examples/server/) | Демо-сервер на Express |

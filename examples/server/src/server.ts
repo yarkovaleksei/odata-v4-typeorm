@@ -10,14 +10,27 @@
  * После старта:
  * - `http://localhost:3001/` — страница-конструктор: собрать запрос мышкой и увидеть ответ;
  * - `http://localhost:3001/api/posts` — сам OData-эндпоинт;
- * - `http://localhost:3001/api/posts/$metadata` — список полей и связей сущности.
+ * - `http://localhost:3001/api/$metadata` — схема сервиса в CSDL XML, как её ждут
+ *   клиенты OData (`ra-data-odata-server`, `@odata/client`, Excel);
+ * - `http://localhost:3001/api/posts/$schema` — список полей и связей сущности в JSON.
+ *
+ * ПРО ДВА РАЗНЫХ ОПИСАНИЯ СХЕМЫ. `$metadata` — стандартный путь OData, и по нему обязан
+ * лежать документ CSDL XML: клиенты разбирают его как XML и на JSON не рассчитывают.
+ * Конструктору же нужна не модель OData, а собственная выжимка (имена полей для подсказок),
+ * поэтому она вынесена на `$schema` — путь, которого в спецификации нет и который ни с чем
+ * не спутаешь.
  */
 import * as path from 'path';
 
 import express, { type Request, type Response } from 'express';
 import type { EntityTarget, ObjectLiteral } from 'typeorm';
 
-import { executeQuery, isODataClientError, type QueryParams } from 'odata-v4-typeorm-improved';
+import {
+  executeQuery,
+  isODataClientError,
+  ODataMetadataMiddleware,
+  type QueryParams,
+} from 'odata-v4-typeorm-improved';
 
 import { dataSource } from './dataSource';
 import { Author } from './entities/author';
@@ -43,6 +56,17 @@ const RESOURCES = {
 } as const satisfies Record<string, { entity: EntityTarget<ObjectLiteral>; alias: string }>;
 
 type ResourceName = keyof typeof RESOURCES;
+
+/**
+ * Сегмент маршрута по классу сущности — обратный к {@link RESOURCES} справочник.
+ *
+ * Нужен, чтобы имена наборов в `$metadata` совпали с адресами, по которым эти наборы
+ * реально лежат: клиент берёт `EntitySet Name` и подставляет его в URL, поэтому набор
+ * `Post` при маршруте `/api/posts` привёл бы его в никуда.
+ */
+const ROUTE_BY_ENTITY = new Map<unknown, string>(
+  (Object.keys(RESOURCES) as ResourceName[]).map((name) => [RESOURCES[name].entity, name])
+);
 
 /**
  * Описание полей и связей сущности для конструктора.
@@ -122,13 +146,26 @@ export async function start(): Promise<void> {
   // Страница-конструктор и её ресурсы.
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
-  // Схема всех сущностей — конструктор запрашивает её один раз при загрузке.
-  app.get('/api/$metadata', (_request, response) => {
+  // Схема сервиса в CSDL XML — то, что запрашивают настоящие клиенты OData.
+  app.get(
+    '/api/$metadata',
+    ODataMetadataMiddleware(dataSource, {
+      namespace: 'Demo',
+      // Только то, что действительно опубликовано маршрутами: `$metadata` перечисляет
+      // все поля и связи, то есть раскрывает схему БД, и служебным сущностям там не место.
+      entities: Object.values(RESOURCES).map((resource) => resource.entity),
+      entitySetName: (metadata) => ROUTE_BY_ENTITY.get(metadata.target) ?? metadata.name,
+    })
+  );
+
+  // Выжимка для страницы-конструктора: не модель OData, а имена полей для подсказок.
+  // Отдельный путь, потому что формат собственный и стандарту не подчиняется.
+  app.get('/api/$schema', (_request, response) => {
     response.json(Object.keys(RESOURCES).map((name) => describeResource(name as ResourceName)));
   });
 
   for (const name of Object.keys(RESOURCES) as ResourceName[]) {
-    app.get(`/api/${name}/$metadata`, (_request, response) => {
+    app.get(`/api/${name}/$schema`, (_request, response) => {
       response.json(describeResource(name));
     });
 

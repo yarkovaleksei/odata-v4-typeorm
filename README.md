@@ -21,6 +21,7 @@ GET /api/users?$filter=contains(name,'ali')&$select=id,name&$orderby=name asc&$t
 - [Что поддерживается](#что-поддерживается)
 - [Способы использования](#способы-использования)
   - [Express: middleware](#express-middleware)
+  - [Схема сервиса: `$metadata` в XML](#схема-сервиса-metadata-в-xml)
   - [Express: свой обработчик](#express-свой-обработчик)
   - [Ограничение выдачи правами пользователя](#ограничение-выдачи-правами-пользователя)
   - [Ограничение доступных полей и размера страницы](#ограничение-доступных-полей-и-размера-страницы)
@@ -61,6 +62,9 @@ yarn server
 
 Затем откройте <http://localhost:3001/>. Ничего поднимать не нужно — демо работает
 на SQLite, база создаётся и наполняется при старте.
+
+Там же отдаётся схема сервиса: <http://localhost:3001/api/$metadata> — готовый документ
+CSDL XML, который можно скормить клиенту OData как есть.
 
 Там же лежит коллекция Postman на 40 запросов: [examples/postman/](./examples/postman/).
 
@@ -145,6 +149,10 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc&\$count=true"
 SQL для функций подбирается под вашу СУБД автоматически (`LENGTH` против `LEN`,
 `EXTRACT` против `strftime` и т.д.) — диалект берётся из подключения TypeORM.
 
+Помимо запросов библиотека отдаёт **схему сервиса** — документ `$metadata` в CSDL XML,
+тот самый, который разбирают `ra-data-odata-server`, `@odata/client` и Excel:
+[Схема сервиса](#схема-сервиса-metadata-в-xml).
+
 **Не поддерживаются:** `in`, лямбды `any` / `all`, `replace`, `cast`, `isof`,
 `mindatetime` / `maxdatetime`, `totalseconds`, геопространственные функции, `$apply`,
 `$compute`, `$levels`, `$skiptoken`. Такой запрос не выполняется молча — он отвергается
@@ -167,6 +175,65 @@ app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), {
   logger: myLogger,   // необязательно, по умолчанию console
 }));
 ```
+
+### Схема сервиса: `$metadata` в XML
+
+Клиенты, которые строят интерфейс по схеме, а не по документации, первым делом запрашивают
+`$metadata` и разбирают ответ **как XML**: `ra-data-odata-server` (react-admin),
+`@odata/client`, Olingo, Excel. Спецификация OData v4 допускает и JSON-представление модели,
+но обязательное — XML, и на JSON эти клиенты не рассчитаны.
+
+```ts
+import { ODataMetadataMiddleware, ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
+
+app.get('/api/$metadata', ODataMetadataMiddleware(dataSource, {
+  namespace: 'Shop',
+  // Только опубликованные сущности: $metadata раскрывает схему БД целиком.
+  entities: [User, Post],
+  // Имя набора = сегмент маршрута, иначе клиент пойдёт по несуществующему адресу.
+  entitySetName: (metadata) => (metadata.name === 'User' ? 'users' : 'posts'),
+}));
+
+app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), { alias: 'User' }));
+app.get('/api/posts', ODataQueryMiddleware(dataSource.getRepository(Post), { alias: 'Post' }));
+```
+
+```
+GET /api/$metadata
+Content-Type: application/xml
+OData-Version: 4.0
+```
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
+  <edmx:DataServices>
+    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="Shop">
+      <EntityType Name="User">
+        <Key>
+          <PropertyRef Name="id"/>
+        </Key>
+        <Property Name="id" Type="Edm.Int32" Nullable="false"/>
+        <Property Name="name" Type="Edm.String" Nullable="false"/>
+        <NavigationProperty Name="posts" Type="Collection(Shop.Post)" Partner="user"/>
+      </EntityType>
+      ...
+      <EntityContainer Name="Container">
+        <EntitySet Name="users" EntityType="Shop.User">
+          <NavigationPropertyBinding Path="posts" Target="posts"/>
+        </EntitySet>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>
+```
+
+Нужна только строка, без HTTP (NestJS, Fastify, запись схемы в файл) — есть
+`createMetadataDocument(dataSource, options)`.
+
+Документ описывает ровно то, что библиотека реально отдаёт: колонки `select: false`,
+поля встроенных сущностей и колонки внешних ключей в него не попадают. Полный перечень
+исключений и все опции — в [docs/api.md](./docs/api.md#createmetadatadocument).
 
 ### Express: свой обработчик
 

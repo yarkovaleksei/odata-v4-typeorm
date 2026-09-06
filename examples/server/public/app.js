@@ -27,7 +27,12 @@ const ui = {
   examples: document.getElementById('examples'),
 };
 
-/** Схема сущностей: заполняется один раз при загрузке из `/api/$metadata`. */
+/**
+ * Схема сущностей: заполняется один раз при загрузке из `/api/$schema`.
+ *
+ * Не `/api/$metadata`: там лежит стандартный документ OData в CSDL XML, а конструктору
+ * нужна собственная выжимка в JSON — имена полей и связей для подсказок.
+ */
 let schema = [];
 
 /**
@@ -257,7 +262,7 @@ function reset() {
 
 async function init() {
   try {
-    schema = await (await fetch('/api/$metadata')).json();
+    schema = await (await fetch('/api/$schema')).json();
   } catch {
     schema = [];
   }

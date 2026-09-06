@@ -184,6 +184,54 @@ app.get('/api/users', async (req, res) => {
 
 ---
 
+## Клиент, который строит интерфейс по схеме (react-admin)
+
+`ra-data-odata-server` и подобные провайдеры не знают о ваших сущностях заранее: при старте
+они запрашивают `$metadata`, разбирают его **как XML** и строят по нему список ресурсов.
+Чтобы такой клиент заработал, сервер должен дать три вещи.
+
+**1. Схему на `$metadata` в CSDL XML.**
+
+```ts
+import { ODataMetadataMiddleware, ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
+
+// Имена наборов обязаны совпадать с сегментами маршрутов: клиент берёт EntitySet Name
+// и подставляет его в URL. Набор `User` при маршруте `/api/users` увёл бы его в никуда.
+const RESOURCES = { users: User, posts: Post };
+
+const routeByEntity = new Map<unknown, string>(
+  Object.entries(RESOURCES).map(([route, entity]) => [entity, route])
+);
+
+app.get('/api/$metadata', ODataMetadataMiddleware(dataSource, {
+  entities: Object.values(RESOURCES),
+  entitySetName: (metadata) => routeByEntity.get(metadata.target) ?? metadata.name,
+}));
+```
+
+**2. Списки в конверте OData.** Провайдер читает `value` и `@odata.count`, а не голый
+массив, — см. [Ответ в формате OData](#ответ-в-формате-odata) выше.
+
+**3. Маршрут на каждый набор** — обычный `ODataQueryMiddleware`, обёрнутый в тот же конверт.
+
+```ts
+for (const [route, entity] of Object.entries(RESOURCES)) {
+  app.get(`/api/${route}`, ODataQueryMiddleware(dataSource.getRepository(entity), {
+    alias: dataSource.getMetadata(entity).name,
+    maxTop: 100,
+  }));
+}
+```
+
+> **Что придётся дописать самостоятельно.** Библиотека компилирует query options — и только
+> их. Адресация по ключу (`/api/users(1)`), служебный документ в корне сервиса, а также
+> создание, изменение и удаление записей в неё не входят: это маршрутизация и запись,
+> а не трансляция запроса. Провайдеру react-admin они нужны для `getOne`, `create`,
+> `update` и `delete`, поэтому их обработчики пишутся руками поверх обычного репозитория
+> TypeORM.
+
+---
+
 ## NestJS: middleware
 
 ```ts

@@ -7,6 +7,8 @@ import {
   executeQuery,
   executeQueryByQueryBuilder,
   ODataQueryMiddleware,
+  ODataMetadataMiddleware,
+  createMetadataDocument,
   createQuery,
   createFilter,
   TypeOrmVisitor,
@@ -19,7 +21,7 @@ import {
 } from 'odata-v4-typeorm-improved';
 ```
 
-Стабильная часть контракта — первые семь. Остальное экспортируется как побочный эффект
+Стабильная часть контракта — первые девять. Остальное экспортируется как побочный эффект
 реэкспорта барреля; рассчитывать на неизменность между минорными версиями не стоит.
 
 ---
@@ -152,6 +154,125 @@ app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), {
 зависящие от запроса (текущий пользователь, тенант), так не задать — для них пишите свой
 обработчик поверх `executeQuery`, пример в
 [recipes.md](./recipes.md#ограничение-выдачи-правами-пользователя).
+
+---
+
+## `ODataMetadataMiddleware`
+
+Готовый обработчик Express для маршрута `$metadata`: отдаёт схему сервиса в CSDL XML.
+
+```ts
+function ODataMetadataMiddleware(
+  dataSource: DataSource,
+  settings?: MetadataDocumentOptions & {
+    logger?: { error: (text: string, ...args: unknown[]) => void };
+  }
+): (req: Request, res: Response, next: NextFunction) => void
+```
+
+```ts
+app.get('/api/$metadata', ODataMetadataMiddleware(dataSource, {
+  namespace: 'Shop',
+  entities: [Author, Book],
+  entitySetName: (metadata) => metadata.tableName,
+}));
+
+app.get('/api/author', ODataQueryMiddleware(dataSource.getRepository(Author), { alias: 'Author' }));
+app.get('/api/book', ODataQueryMiddleware(dataSource.getRepository(Book), { alias: 'Book' }));
+```
+
+**Ответы**
+
+| Ситуация | Код | Тело |
+|---|---|---|
+| Успех | `200` | Документ CSDL XML |
+| Любая ошибка | `500` | `{ message: 'Internal server error.' }` |
+
+Заголовки успешного ответа — `Content-Type: application/xml` и `OData-Version: 4.0`.
+Клиентских ошибок здесь не бывает: документ не зависит от содержимого запроса.
+
+`dataSource` может быть ещё не инициализирован в момент регистрации маршрута — документ
+строится при первом запросе. Построенный документ кэшируется, неудачная попытка — нет:
+иначе ранний запрос к приложению, которое ещё не подключилось к БД, закрепил бы ошибку
+навсегда.
+
+**Путь маршрута** должен совпадать с корнем сервиса, от которого клиент считает адреса
+наборов: если данные лежат на `/api/Authors`, схема обязана быть на `/api/$metadata`.
+В Express 5 `$` — обычный символ, экранировать его не нужно.
+
+---
+
+## `createMetadataDocument`
+
+Строит документ `$metadata` (CSDL XML) по метаданным TypeORM. HTTP не касается — подходит
+для NestJS, Fastify, записи схемы в файл и тестов.
+
+```ts
+function createMetadataDocument(
+  dataSource: DataSource,
+  options?: MetadataDocumentOptions
+): string
+```
+
+```ts
+const xml = createMetadataDocument(dataSource, { namespace: 'Shop' });
+```
+
+**Зачем XML.** Спецификация OData v4 определяет два представления модели — CSDL XML
+и CSDL JSON, — причём XML обязательное. Клиенты исходят из этого: `ra-data-odata-server`
+(react-admin), `@odata/client`, Olingo и Excel запрашивают `$metadata` и разбирают ответ
+как XML. JSON они не прочитают.
+
+**Что попадает в документ.** Ровно то, что библиотека реально отдаёт по запросу: свойства —
+`nonVirtualColumns` без скрытых `select: false`, то есть тот же список, который идёт
+в `SELECT` по умолчанию; связи — то, что доступно через `$expand`. Совпадение намеренное:
+документ, обещающий поле, которого запрос не вернёт, хуже отсутствующего — клиент построит
+по нему форму и получит пустую колонку.
+
+**Чего в документе нет:**
+
+| Что | Почему |
+|---|---|
+| Колонки с `@Column({ select: false })` | Библиотека их не возвращает и отвергает обращения к ним (дефект A-12). Включаются опцией `includeHiddenColumns` |
+| Колонки встроенных сущностей (`@Column(() => Name)`) | Путь свойства содержит точку (`name.first`); в CSDL это отдельный `ComplexType`, а запросить такое поле всё равно нельзя — `name/first` разбирается как переход по связи |
+| Колонки внешних ключей (`authorId`) | В модели OData за них отвечает `NavigationProperty`; TypeORM помечает их виртуальными, и в `SELECT` они тоже не попадают |
+| Сущности без первичного ключа (обычно представления) | `EntityType` обязан иметь `Key` |
+| Сущности, чей ключ ведёт через связь | Путь такого ключа выглядит как `book.id`, представить его `PropertyRef` нельзя |
+| Таблицы связи «многие ко многим» | Самостоятельными сущностями не являются; в модели OData им соответствует сама связь |
+| Связи на сущности вне документа | Ссылка на необъявленный тип сделала бы схему невалидной целиком |
+
+### `MetadataDocumentOptions`
+
+| Поле | Тип | По умолчанию | Назначение |
+|---|---|---|---|
+| `namespace` | `string` | `'Default'` | Пространство имён схемы; им же квалифицируются ссылки на типы |
+| `containerName` | `string` | `'Container'` | Имя `EntityContainer` |
+| `entities` | `EntityTarget[]` | все из `DataSource` | Какие сущности описывать |
+| `entitySetName` | `(metadata) => string` | `(m) => m.name` | Имя `EntitySet` |
+| `includeHiddenColumns` | `boolean` | `false` | Описывать ли колонки `select: false` |
+| `edmType` | `(column) => string \| undefined` | — | Переопределение типа EDM; `undefined` означает «решай по умолчанию» |
+
+**Про `entitySetName`.** Для потребителей вроде `ra-data-odata-server` это имя становится
+и именем ресурса react-admin, и сегментом URL, по которому он ходит за данными, — то есть
+оно обязано совпадать с маршрутом, на который повешен `ODataQueryMiddleware`. Множественное
+число по умолчанию не образуется намеренно: правила английской морфологии в общем случае
+не выводятся, и угаданное `Personss` молча разошлось бы с реальным маршрутом.
+
+**Про `entities`.** Для публичного API перечисляйте сущности явно: `$metadata` содержит
+имена всех полей и связей, то есть раскрывает схему БД целиком, и служебным сущностям
+(сессии, аудит, очереди) там делать нечего.
+
+**Про типы.** Соответствие типов колонок типам EDM ведёт `resolveEdmType`. Незнакомый тип
+приводится к `Edm.String`, а не отвергается ошибкой: набор типов у каждой СУБД открыт
+(домены, расширения), и падение генерации всего документа из-за одной экзотической колонки
+было бы хуже приблизительного описания одного поля. Для таких колонок есть `edmType`.
+Приближённые дробные (`float`, `real`, `double precision`) все приводятся к `Edm.Double`:
+объявить хранилище точнее, чем оно есть, безопасно, обратное направление — нет.
+
+**Ошибки.** `createMetadataDocument` бросает `Error`, если `DataSource` не инициализирован:
+до `initialize()` список сущностей пуст, и молча вернулся бы синтаксически корректный, но
+пустой документ — клиент решил бы, что сервис не отдаёт ни одного ресурса, и никакой ошибки
+при этом не увидел бы.
 
 ---
 
