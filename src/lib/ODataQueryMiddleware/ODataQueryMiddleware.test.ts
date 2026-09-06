@@ -83,6 +83,32 @@ describe('ODataQueryMiddleware', () => {
 
       expect(state.body as unknown[]).toHaveLength(2);
     });
+
+    it('очередь настроек необязательна, но без alias запрос не выполняется', async () => {
+      // `settings` объявлен необязательным, и обработчик собирается без него. Работать
+      // такой обработчик, однако, не будет: `alias` подставляется пустой строкой, и запрос
+      // упирается в `getMetadata('')`. Это ошибка настройки, а не запроса, — отсюда 500
+      // и `next`, а не 400. Тест закрепляет именно это: молчаливой выборки не будет.
+      const { res, state } = createResponse();
+      const next = jest.fn();
+      const logger = { error: jest.fn() };
+
+      const handler = ODataQueryMiddleware(dataSource.getRepository(Author), { logger });
+
+      await handler(
+        { query: { $top: '1' } } as unknown as Request,
+        res,
+        next as unknown as NextFunction
+      );
+
+      expect(state.status).toBe(500);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it('фабрику можно вызвать вовсе без настроек', () => {
+      // Второй аргумент необязателен по типу — вызов без него обязан хотя бы собираться.
+      expect(() => ODataQueryMiddleware(dataSource.getRepository(Author))).not.toThrow();
+    });
   });
 
   describe('клиентские ошибки → 400', () => {
@@ -155,6 +181,37 @@ describe('ODataQueryMiddleware', () => {
       // ...но доходит до общего обработчика приложения.
       expect(next).toHaveBeenCalledWith(boom);
       expect(logger.error).toHaveBeenCalledWith('ODATA ERROR', boom);
+    });
+
+    it('exposeErrors раскрывает текст неизвестной ошибки в 500', async () => {
+      const { res, state } = createResponse();
+      const next = jest.fn();
+
+      const boom = new Error('критическая ошибка');
+      const brokenRepository = {
+        createQueryBuilder: () => {
+          throw boom;
+        },
+      };
+
+      const handler = ODataQueryMiddleware(brokenRepository as never, {
+        alias: 'Author',
+        exposeErrors: true,
+      });
+
+      await handler({ query: {} } as unknown as Request, res, next as unknown as NextFunction);
+
+      expect(state.status).toBe(500);
+      expect(state.body).toEqual({ message: 'критическая ошибка' });
+      expect(next).toHaveBeenCalledWith(boom);
+    });
+
+    it('некорректный запрос на QueryFailedError даёт 400 при exposeErrors=false', async () => {
+      const { state, next } = await run({ $filter: 'nonexistent eq 1' }, { exposeErrors: false });
+
+      expect(state.status).toBe(400);
+      expect(state.body).toEqual({ message: 'Invalid OData query.' });
+      expect(next).not.toHaveBeenCalled();
     });
   });
 

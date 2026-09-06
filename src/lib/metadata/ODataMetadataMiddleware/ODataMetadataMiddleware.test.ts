@@ -137,6 +137,16 @@ describe('ODataMetadataMiddleware', () => {
 
       expect(next).not.toHaveBeenCalled();
     });
+
+    it('работает без настроек вовсе', () => {
+      // Типовой вызов из документации: `app.get('/api/$metadata', ODataMetadataMiddleware(ds))`.
+      // Умолчания должны давать рабочий документ, иначе пример из README не заводится.
+      const { state, next } = run(ODataMetadataMiddleware(dataSource));
+
+      expect(state.status).toBe(200);
+      expect(String(state.body)).toContain('<edmx:Edmx');
+      expect(next).not.toHaveBeenCalled();
+    });
   });
 
   describe('кэширование', () => {
