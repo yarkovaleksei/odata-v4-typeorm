@@ -42,6 +42,24 @@ describe('convertLiteral', () => {
     );
   });
 
+  /**
+   * В записи длительности обязательна только буква `P`: любая из четырёх составляющих
+   * может отсутствовать. Пропущенная должна читаться как ноль, а не как `NaN` — иначе
+   * всё выражение сравнения молча становится ложным.
+   */
+  it('пропущенные составляющие длительности считаются нулями', () => {
+    expect(convertLiteral('Edm.Duration', "duration'PT30M15S'")).toBe((30 * 60 + 15) * 1000);
+    expect(convertLiteral('Edm.Duration', "duration'P2D'")).toBe(2 * 24 * 60 * 60 * 1000);
+    expect(convertLiteral('Edm.Duration', "duration'PT0.5S'")).toBe(500);
+  });
+
+  it('длительность без буквы P отвергается', () => {
+    // Молча вернуть ноль здесь нельзя: `duration'1D'` — опечатка, а не нулевой интервал.
+    expect(() => convertLiteral('Edm.Duration', "duration'1D'")).toThrow(
+      /Invalid duration literal/
+    );
+  });
+
   it('незнакомый тип возвращается как есть — приведением займётся драйвер СУБД', () => {
     expect(convertLiteral('Edm.Geography', 'что-то')).toBe('что-то');
   });
@@ -69,7 +87,12 @@ describe('literalToSql', () => {
     ['null', 'null', 'NULL'],
     ['Edm.Boolean', 'true', '1'],
     ['Edm.Boolean', 'false', '0'],
+    // Логическое значение, которое не разобралось, инлайнится как NULL: сравнение с ним
+    // ложно при любом значении колонки — то же, что и `undefined` в режиме параметров.
+    ['Edm.Boolean', 'maybe', 'NULL'],
     ['Edm.Date', '2020-01-15', "'2020-01-15'"],
+    ['Edm.Guid', '0f8fad5b-d9cb-469f-a165-70867728950e', "'0f8fad5b-d9cb-469f-a165-70867728950e'"],
+    ['Edm.TimeOfDay', '08%3A00%3A00', "'08:00:00'"],
     ['Edm.Int64', '42', '42'],
   ])('%s %s', (type, raw, expected) => {
     expect(literalToSql(type, raw)).toBe(expected);

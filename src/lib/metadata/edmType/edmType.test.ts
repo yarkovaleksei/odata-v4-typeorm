@@ -98,5 +98,10 @@ describe('resolveEdmType', () => {
 
       expect(resolveEdmType(column(Money))).toBe(FALLBACK_EDM_TYPE);
     });
+
+    it('колонка без объявленного типа даёт запасной тип', () => {
+      // `type` необязателен: у виртуальных колонок и у части наследуемых его нет вовсе.
+      expect(resolveEdmType(column(undefined))).toBe(FALLBACK_EDM_TYPE);
+    });
   });
 });
