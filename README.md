@@ -550,6 +550,8 @@ GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
 | [docs/development.md](./docs/development.md) | Работа над пакетом |
 | [docs/audit.md](./docs/audit.md) | Аудит: дефекты, безопасность, инфраструктура |
 | [docs/roadmap.md](./docs/roadmap.md) | План работ |
+| [CHANGELOG.md](./CHANGELOG.md) | Что менялось между версиями, включая ломающие изменения |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Как сообщить о дефекте и как прислать изменение |
 
 ## Для разработчиков пакета
 
@@ -563,7 +565,7 @@ cd odata-v4-typeorm-improved
 с плагином Compose:
 
 ```bash
-yarn docker:test        # lint + тесты + сборка
+yarn docker:test        # lint + формат + документация + тесты + сборка
 yarn docker:test:all    # матрица OData на SQLite, PostgreSQL и MySQL
 yarn docker:down        # погасить всё
 ```
@@ -575,7 +577,7 @@ yarn docker:down        # погасить всё
 
 ```bash
 yarn install
-yarn verify                  # lint + тесты + сборка
+yarn verify                  # lint + формат + документация + тесты + сборка
 yarn db:up && yarn test:all  # матрица на трёх СУБД, базы из compose
 ```
 
@@ -583,11 +585,14 @@ yarn db:up && yarn test:all  # матрица на трёх СУБД, базы �
 
 | Команда | Что делает |
 |---|---|
-| `yarn verify` | lint + тесты + сборка — то же, что делает CI |
+| `yarn verify` | lint + формат + документация + тесты + сборка — то же, что делает CI |
 | `yarn test:unit` | Прогон тестов Jest на SQLite в памяти |
 | `yarn test:all` | Тот же набор тестов на всех трёх СУБД |
-| `yarn db:up` | Поднять PostgreSQL и MySQL для прогона с хоста |
+| `yarn test:coverage` | Тесты с измерением покрытия и проверкой порогов |
+| `yarn db:up` / `yarn db:down` | Поднять и погасить PostgreSQL и MySQL для прогона с хоста |
 | `yarn lint` / `yarn lint:fix` | ESLint, с автоисправлением и без |
+| `yarn format` / `yarn format:check` | Prettier, с записью изменений и без |
+| `yarn docs:check` | Ссылки, якоря и примеры кода в документации |
 | `yarn build` | Чистая пересборка в `build/` |
 | `yarn docker:test` | `yarn verify` внутри контейнера |
 | `yarn docker:test:all` | Матрица на трёх СУБД внутри контейнера |
@@ -615,7 +620,7 @@ yarn test:unit -t 'должен обработать AND/OR'
 
 # Watch-режим и покрытие
 yarn test:unit --watch
-yarn test:unit --coverage
+yarn test:coverage
 
 # Что попадёт в npm-пакет
 npm pack --dry-run

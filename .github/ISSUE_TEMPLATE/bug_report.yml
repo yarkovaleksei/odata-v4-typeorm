@@ -1,0 +1,89 @@
+# Форма, а не markdown-шаблон: поля обязательны, и запрос вместе с версией СУБД приходит
+# сразу. Половина дефектов проекта (A-05, A-15, расхождения div и round) воспроизводится
+# только на конкретной СУБД, поэтому её версия здесь не формальность.
+name: Дефект
+description: Библиотека возвращает не то или падает
+labels: [bug]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Перед отправкой стоит заглянуть в [docs/audit.md](https://github.com/yarkovaleksei/odata-v4-typeorm-improved/blob/master/docs/audit.md)
+        — там разобранные дефекты с воспроизведением, обходными путями и статусом.
+
+        Если запрос отвергается с `ODataUnsupportedError`, сверьтесь с
+        [docs/odata-support.md](https://github.com/yarkovaleksei/odata-v4-typeorm-improved/blob/master/docs/odata-support.md):
+        библиотека сознательно отказывается от того, чего не умеет, — это заявленное
+        поведение, а не дефект.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Что происходит
+      description: 'Коротко: что вы делаете и чем это заканчивается.'
+    validations:
+      required: true
+
+  - type: textarea
+    id: query
+    attributes:
+      label: OData-запрос
+      description: Целиком, как он приходит в библиотеку.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: entities
+    attributes:
+      label: Сущности TypeORM
+      description: Можно сокращённо — важны колонки и связи, участвующие в запросе.
+      render: ts
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидалось и получилось
+      description: |
+        Что должно было вернуться и что вернулось на самом деле. Если получена ошибка —
+        приведите её текст и код ответа.
+    validations:
+      required: true
+
+  - type: textarea
+    id: sql
+    attributes:
+      label: Сгенерированный SQL
+      description: |
+        Необязательно, но экономит половину переписки. Как его получить — в разделе
+        «Отладка» файла docs/development.md.
+      render: sql
+
+  - type: input
+    id: database
+    attributes:
+      label: СУБД и версия
+      placeholder: PostgreSQL 18 / MySQL 8.4 / SQLite 3.45 / MS SQL 2022
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Версии пакета, TypeORM и Node
+      placeholder: odata-v4-typeorm-improved 2.0.0, typeorm 0.3.x, Node 22
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверено
+      options:
+        - label: Конструкция числится поддерживаемой в docs/odata-support.md
+          required: true
+        - label: Похожего дефекта нет в docs/audit.md и в открытых issue
+          required: true

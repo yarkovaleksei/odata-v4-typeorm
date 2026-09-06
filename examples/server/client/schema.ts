@@ -28,10 +28,7 @@ export async function loadSchema(): Promise<SchemaResource[]> {
 }
 
 /** Ресурс по сегменту маршрута (`books`). */
-export function findResource(
-  schema: SchemaResource[],
-  name: string
-): SchemaResource | undefined {
+export function findResource(schema: SchemaResource[], name: string): SchemaResource | undefined {
   return schema.find((item) => item.name === name);
 }
 

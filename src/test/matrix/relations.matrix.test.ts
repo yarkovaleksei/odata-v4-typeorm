@@ -24,8 +24,16 @@ import { bookIds, categoryIds, rows, runMatrix } from './helpers';
 
 describe('«многие ко многим»: фильтр по метке', () => {
   runMatrix(bookIds, [
-    { name: 'tags/label eq classic', query: { $filter: "tags/label eq 'classic'" }, expected: [1, 3] },
-    { name: 'tags/label eq history', query: { $filter: "tags/label eq 'history'" }, expected: [3, 4] },
+    {
+      name: 'tags/label eq classic',
+      query: { $filter: "tags/label eq 'classic'" },
+      expected: [1, 3],
+    },
+    {
+      name: 'tags/label eq history',
+      query: { $filter: "tags/label eq 'history'" },
+      expected: [3, 4],
+    },
     {
       name: 'метка, которой ни у кого нет',
       query: { $filter: "tags/label eq 'unread'" },
@@ -183,9 +191,9 @@ describe('путь через две связи', () => {
   ]);
 
   it('сортировка по полю связи', async () => {
-    expect(
-      await bookIds({ $orderby: 'publisher/name asc,id asc', $filter: 'id ne 5' })
-    ).toEqual([1, 2, 3, 4]);
+    expect(await bookIds({ $orderby: 'publisher/name asc,id asc', $filter: 'id ne 5' })).toEqual([
+      1, 2, 3, 4,
+    ]);
   });
 
   it('$expand по цепочке связей', async () => {

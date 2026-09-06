@@ -16,13 +16,7 @@
  * Ссылки на них остаются вперемешку с числовыми (`book.author_id` — число,
  * `book.publisher_id` — UUID), то есть проверяется именно смешанная схема.
  */
-import {
-  Book,
-  BookDetails,
-  BOOK_DETAILS_IDS,
-  Publisher,
-  PUBLISHER_IDS,
-} from '../fixtures';
+import { Book, BookDetails, BOOK_DETAILS_IDS, Publisher, PUBLISHER_IDS } from '../fixtures';
 import { dataSource } from '../setup/dataSource';
 import { rows } from './helpers';
 

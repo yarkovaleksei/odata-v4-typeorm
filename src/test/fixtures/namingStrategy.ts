@@ -20,9 +20,7 @@ import { DefaultNamingStrategy, type NamingStrategyInterface } from 'typeorm';
 
 /** `registeredAt` → `registered_at`, `ISBNCode` → `isbn_code`. */
 function snakeCase(value: string): string {
-  return value
-    .replace(/(?:([a-z0-9])([A-Z]))|(?:((?!^)[A-Z])([a-z]))/g, '$1_$3$2$4')
-    .toLowerCase();
+  return value.replace(/(?:([a-z0-9])([A-Z]))|(?:((?!^)[A-Z])([a-z]))/g, '$1_$3$2$4').toLowerCase();
 }
 
 /**

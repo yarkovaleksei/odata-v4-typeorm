@@ -16,7 +16,7 @@
 git clone https://github.com/yarkovaleksei/odata-v4-typeorm-improved.git
 cd odata-v4-typeorm-improved
 
-yarn docker:test        # lint + тесты + сборка на SQLite
+yarn docker:test        # lint + формат + документация + тесты + сборка на SQLite
 yarn docker:test:all    # матрица OData на SQLite, PostgreSQL и MySQL
 yarn docker:down        # погасить всё и удалить данные
 ```
@@ -42,7 +42,7 @@ yarn docker:build
 
 ```bash
 yarn install
-yarn verify                 # lint + тесты + сборка
+yarn verify                  # lint + формат + документация + тесты + сборка
 yarn db:up && yarn test:all  # матрица на трёх СУБД, базы из compose
 ```
 
@@ -58,11 +58,16 @@ yarn db:up && yarn test:all  # матрица на трёх СУБД, базы �
 | `yarn test:postgres` | Тот же набор тестов на PostgreSQL |
 | `yarn test:mysql` | Тот же набор на MySQL |
 | `yarn test:all` | Последовательно на всех трёх СУБД |
-| `yarn verify` | lint + тесты + сборка — то же, что делает CI |
+| `yarn test:coverage` | Тесты с измерением покрытия и проверкой порогов из `jest.config.js` |
+| `yarn verify` | lint + формат + документация + тесты + сборка — то же, что делает CI |
 | `yarn lint` | ESLint по всем `.ts` / `.tsx`, включая `examples/` |
 | `yarn lint:fix` | То же с автоисправлением |
+| `yarn format` | Prettier по всему репозиторию с записью изменений |
+| `yarn format:check` | Только проверка формата — этот вариант и стоит в CI |
+| `yarn docs:check` | Ссылки, якоря и примеры кода в документации (см. `scripts/docs-check.ts`) |
 | `yarn build` | Чистая пересборка в `build/` (`rm -rf ./build && tsc -p tsconfig.build.json`) |
 | `yarn db:up` | Поднять PostgreSQL и MySQL для прогона с хоста |
+| `yarn db:down` | Погасить их (данные в tmpfs, сохранять нечего) |
 | `yarn server` | Поднять демо-сервер из `examples/server` с автоперезапуском |
 | `yarn client:build` | Собрать код страницы-конструктора; при `yarn server` выполняется сам |
 
@@ -84,9 +89,7 @@ yarn db:up && yarn test:all  # матрица на трёх СУБД, базы �
 | `yarn release` | `build` + `npm publish` |
 | `yarn release:beta` | `build` + `npm publish --tag beta` |
 
-Обычно вручную не запускаются: публикацию делает
-[`.github/workflows/publish.yaml`](../.github/workflows/publish.yaml) по созданию GitHub Release,
-через OIDC Trusted Publishing и с `--provenance`.
+Публикация делается вручную, этими командами. Порядок — в разделе «Релиз».
 
 ### Полезные вызовы Jest напрямую
 
@@ -102,8 +105,8 @@ yarn test:unit -t 'должен обработать AND/OR'
 # Watch-режим
 yarn test:unit --watch
 
-# Покрытие (в конфиге не включено, но флаг работает)
-yarn test:unit --coverage
+# Покрытие с проверкой порогов; отчёт в HTML — в coverage/lcov-report/index.html
+yarn test:coverage
 
 # Подробный вывод по каждому тесту
 yarn test:unit --verbose
@@ -167,8 +170,10 @@ yarn verify          # локально
 yarn docker:test     # либо то же самое в контейнере
 ```
 
-Ровно эту цепочку выполняет CI ([`ci.yaml`](../.github/workflows/ci.yaml)) на Node 20/22/24,
-плюс отдельная джоба прогоняет матрицу на PostgreSQL и MySQL.
+Ровно эту цепочку выполняет CI ([`ci.yaml`](../.github/workflows/ci.yaml)) на Node 20/22/24.
+Сверх неё CI проверяет типы демо-сервера и содержимое npm-пакета, а порог покрытия
+(`yarn test:coverage`) и документацию (`yarn docs:check`) — один раз, на Node 22: они зависят
+от кода, а не от рантайма. Отдельная джоба прогоняет матрицу на PostgreSQL и MySQL.
 
 ---
 
@@ -212,6 +217,8 @@ examples/server/             ← демо-сервер на Express (те же �
 ├── src/                     код сервера (Node, ts-node)
 ├── client/                  код страницы-конструктора (TypeScript → модули ES)
 └── public/                  разметка, стили и результат сборки client/ (в .gitignore)
+scripts/
+└── docs-check.ts            проверка ссылок, якорей и примеров кода в документации
 docs/                        ← эта документация
 ```
 
@@ -491,9 +498,11 @@ yarn server
 - **Линтуется весь TypeScript**, включая `examples/` — и сервер демо, и код страницы-конструктора.
   Из проверки исключён только `**/*.js`: под это правило попадает результат компиляции
   страницы (`examples/server/public/js`), линтовать сгенерированный код незачем.
-- **Prettier** — конфиг [`.prettierrc`](../.prettierrc) есть (2 пробела, одинарные кавычки,
-  точки с запятой, ширина 100), но сам пакет **не установлен** и в CI формат не проверяется
-  ([roadmap.md](./roadmap.md), задача R-22). Настройте форматирование в редакторе по этому конфигу.
+- **Prettier** — конфиг [`.prettierrc`](../.prettierrc) (2 пробела, одинарные кавычки,
+  точки с запятой, ширина 100). Формат проверяется в CI (`yarn format:check`), правится
+  командой `yarn format`. Что исключено из проверки и почему — в [`.prettierignore`](../.prettierignore);
+  коротко: документация форматируется руками, потому что Prettier переносил бы в ней прозу
+  и переверстывал таблицы, а её целостность стережёт отдельная проверка `yarn docs:check`.
 - Комментарии и сообщения тестов — на русском, как и в существующем коде.
 - Публичные функции документируются JSDoc с `@param`, `@returns`, `@example` и — если поведение
   неочевидно — `@remarks`.
@@ -532,14 +541,18 @@ yarn server
 
 ## Релиз
 
-1. Убедиться, что `yarn lint && yarn test:unit && yarn build` проходят.
+Публикация ручная.
+
+1. Убедиться, что `yarn verify` проходит.
 2. Проверить содержимое пакета: `npm pack --dry-run` (в CI это делает шаг
    «Check package contents»).
-3. Поднять версию в `package.json`.
+3. Поднять версию в `package.json`, записать изменения в [CHANGELOG.md](../CHANGELOG.md).
 4. Закоммитить, поставить тег, запушить.
-5. Создать GitHub Release — workflow `publish.yaml` соберёт и опубликует пакет автоматически.
+5. `npm login`, затем `yarn release` — сборка и `npm publish`.
+6. Создать GitHub Release по тегу — как запись об изменениях для тех, кто следит
+   за репозиторием.
 
-Бета-версия — вручную: `yarn release:beta` (тег `beta` в npm).
+Бета-версия: `yarn release:beta` (тег `beta` в npm).
 
 ---
 

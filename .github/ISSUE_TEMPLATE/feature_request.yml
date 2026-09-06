@@ -1,0 +1,51 @@
+# Отдельная форма от дефекта: у доработки другой разговор — не «что сломалось»,
+# а «зачем это нужно и во что упирается». Часть возможностей OData здесь не реализована
+# осознанно (см. docs/odata-support.md), и форма сразу отсылает к причинам.
+name: Доработка
+description: Не хватает возможности OData или опции API
+labels: [enhancement]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Многое из ненаписанного уже разложено по этапам в
+        [docs/roadmap.md](https://github.com/yarkovaleksei/odata-v4-typeorm-improved/blob/master/docs/roadmap.md)
+        — возможно, у задачи уже есть номер `R-NN` и оценка.
+
+        Часть возможностей не реализована сознательно: `in` и лямбды `any` / `all` не
+        разбирает сам парсер, `totalseconds` требует модели `Edm.Duration`, границы
+        `mindatetime` расходятся между СУБД. Причины перечислены в
+        [docs/odata-support.md](https://github.com/yarkovaleksei/odata-v4-typeorm-improved/blob/master/docs/odata-support.md).
+
+  - type: textarea
+    id: need
+    attributes:
+      label: Чего не хватает
+      description: Какая конструкция OData или опция API нужна.
+    validations:
+      required: true
+
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Зачем
+      description: |
+        Настоящая задача, из которой это выросло. Такое описание сильнее влияет
+        на приоритет, чем ссылка на раздел спецификации: часть возможностей стоит дорого,
+        и делать их «для полноты» смысла нет.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Как обходитесь сейчас
+      description: Например, готовым `SelectQueryBuilder` с предустановленным условием.
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Участие
+      options:
+        - label: Готов прислать PR

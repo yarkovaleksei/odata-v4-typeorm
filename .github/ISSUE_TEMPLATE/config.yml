@@ -1,0 +1,16 @@
+# Пустые issue отключены: без запроса, сущностей и версии СУБД дефект всё равно
+# не воспроизвести, и переписка начинается с выяснения того же самого.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Что поддерживается, а что нет
+    url: https://github.com/yarkovaleksei/odata-v4-typeorm-improved/blob/master/docs/odata-support.md
+    about: Матрица OData и границы поддержки — прежде чем заводить дефект.
+
+  - name: Известные дефекты
+    url: https://github.com/yarkovaleksei/odata-v4-typeorm-improved/blob/master/docs/audit.md
+    about: Разбор с воспроизведением, обходными путями и статусом.
+
+  - name: Вопрос по использованию
+    url: https://github.com/yarkovaleksei/odata-v4-typeorm-improved/discussions
+    about: Как подключить, как сузить тип ответа, как ограничить поля — сюда.

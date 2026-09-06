@@ -41,12 +41,7 @@ const INDENT = '  ';
 const TYPES_WITH_MAX_LENGTH = ['Edm.String', 'Edm.Binary'];
 
 /** Типы EDM, для которых `Precision` имеет смысл. */
-const TYPES_WITH_PRECISION = [
-  'Edm.Decimal',
-  'Edm.DateTimeOffset',
-  'Edm.TimeOfDay',
-  'Edm.Duration',
-];
+const TYPES_WITH_PRECISION = ['Edm.Decimal', 'Edm.DateTimeOffset', 'Edm.TimeOfDay', 'Edm.Duration'];
 
 /**
  * Простой идентификатор CSDL.

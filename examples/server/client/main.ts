@@ -10,7 +10,12 @@
  */
 import { form, TEXT_FIELDS, ui } from './dom.js';
 import { generateExamples } from './examples.js';
-import { markActiveChips, renderFieldHints, renderSchemaUnavailable, toggleToken } from './hints.js';
+import {
+  markActiveChips,
+  renderFieldHints,
+  renderSchemaUnavailable,
+  toggleToken,
+} from './hints.js';
 import { buildQuery, refreshUrl, run, setStatus } from './query.js';
 import { renderExamples } from './render.js';
 import { findResource, loadSchema } from './schema.js';

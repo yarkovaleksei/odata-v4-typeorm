@@ -65,7 +65,11 @@ describe('$filter — логические операторы', () => {
       expected: [1, 2, 4],
     },
     // OData v4, раздел 5.1.1.9. Отрицание обязано инвертировать результат, а не исчезать.
-    { name: 'not инвертирует условие', query: { $filter: "not (name eq 'Ada')" }, expected: [2, 3, 4] },
+    {
+      name: 'not инвертирует условие',
+      query: { $filter: "not (name eq 'Ada')" },
+      expected: [2, 3, 4],
+    },
     {
       name: 'not с составным условием',
       query: { $filter: 'not (age gt 40 or isActive eq false)' },
@@ -149,7 +153,11 @@ describe('$filter — строковые функции', () => {
     { name: 'length', query: { $filter: 'length(name) eq 3' }, expected: [1] },
     { name: 'indexof', query: { $filter: "indexof(name,'da') eq 1" }, expected: [1] },
     { name: 'trim', query: { $filter: "trim(name) eq 'Ada'" }, expected: [1] },
-    { name: 'substring с двумя аргументами', query: { $filter: "substring(name,1) eq 'da'" }, expected: [1] },
+    {
+      name: 'substring с двумя аргументами',
+      query: { $filter: "substring(name,1) eq 'da'" },
+      expected: [1],
+    },
     {
       name: 'substring с тремя аргументами',
       query: { $filter: "substring(name,0,3) eq 'Ada'" },
@@ -205,8 +213,16 @@ describe('$filter — функции даты и времени', () => {
       query: { $filter: 'registeredAt lt 2021-01-01T00:00:00Z' },
       expected: [1],
     },
-    { name: 'date выделяет календарную дату', query: { $filter: 'date(registeredAt) eq 2020-01-15' }, expected: [1] },
-    { name: 'time выделяет время суток', query: { $filter: 'time(registeredAt) eq 08:00:00' }, expected: [2] },
+    {
+      name: 'date выделяет календарную дату',
+      query: { $filter: 'date(registeredAt) eq 2020-01-15' },
+      expected: [1],
+    },
+    {
+      name: 'time выделяет время суток',
+      query: { $filter: 'time(registeredAt) eq 08:00:00' },
+      expected: [2],
+    },
   ];
 
   runMatrix(authorIds, cases);

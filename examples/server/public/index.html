@@ -10,8 +10,8 @@
     <header class="page-header">
       <h1>Конструктор OData-запросов</h1>
       <p class="subtitle">
-        Соберите запрос полями формы, посмотрите на получившийся URL и выполните его.
-        Данные живые — их отдаёт
+        Соберите запрос полями формы, посмотрите на получившийся URL и выполните его. Данные живые —
+        их отдаёт
         <code>odata-v4-typeorm-improved</code> поверх TypeORM и SQLite.
       </p>
     </header>
@@ -36,8 +36,8 @@
             placeholder="contains(title,'SQL') and id gt 2"
           ></textarea>
           <p class="hint">
-            Сравнения <code>eq ne gt ge lt le</code>, логика <code>and or not</code>,
-            арифметика <code>add sub mul div mod</code>, функции
+            Сравнения <code>eq ne gt ge lt le</code>, логика <code>and or not</code>, арифметика
+            <code>add sub mul div mod</code>, функции
             <code>contains startswith tolower length substring year</code>.
           </p>
         </div>
@@ -89,10 +89,9 @@
             <span>$count — вернуть <code>{ items, count }</code> вместо массива</span>
           </label>
           <p class="hint">
-            Выключен по умолчанию, как требует OData: отсутствующий <code>$count</code>
-            означает <code>false</code>, и ответом будет обычный массив. Включите, чтобы
-            получить общее число строк по фильтрам — без учёта <code>$top</code> и
-            <code>$skip</code>.
+            Выключен по умолчанию, как требует OData: отсутствующий <code>$count</code> означает
+            <code>false</code>, и ответом будет обычный массив. Включите, чтобы получить общее число
+            строк по фильтрам — без учёта <code>$top</code> и <code>$skip</code>.
           </p>
         </div>
 
@@ -122,9 +121,9 @@
       <section class="panel examples" aria-label="Готовые примеры">
         <h2>Примеры <span id="examples-resource" class="tag"></span></h2>
         <p class="hint">
-          Примеры собираются под выбранную сущность: по её полям, связям и реальным
-          значениям из базы — поэтому каждый возвращает непустой результат. Нажмите —
-          он подставится в форму и выполнится. Отмеченные
+          Примеры собираются под выбранную сущность: по её полям, связям и реальным значениям из
+          базы — поэтому каждый возвращает непустой результат. Нажмите — он подставится в форму и
+          выполнится. Отмеченные
           <span class="tag tag--error">400</span> показывают, как библиотека отвергает
           неподдерживаемое, вместо того чтобы молча вернуть не те данные.
         </p>

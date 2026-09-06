@@ -34,7 +34,7 @@ const EDM_TYPE_BY_COLUMN_TYPE: Readonly<Record<string, string>> = {
   char: 'Edm.String',
   character: 'Edm.String',
   varchar: 'Edm.String',
-  'varchar2': 'Edm.String',
+  varchar2: 'Edm.String',
   'character varying': 'Edm.String',
   nchar: 'Edm.String',
   nvarchar: 'Edm.String',
@@ -56,7 +56,7 @@ const EDM_TYPE_BY_COLUMN_TYPE: Readonly<Record<string, string>> = {
   // отдельного типа, а фильтровать значение всё равно нужно как строку.
   enum: 'Edm.String',
   'simple-enum': 'Edm.String',
-  'set': 'Edm.String',
+  set: 'Edm.String',
 
   // ── Идентификаторы ────────────────────────────────────────────────────────
   uuid: 'Edm.Guid',

@@ -49,8 +49,18 @@ describe('$orderby', () => {
 
 describe('$top и $skip', () => {
   const cases: readonly MatrixCase[] = [
-    { name: '$top ограничивает выдачу', query: { $orderby: 'id asc', $top: '2' }, expected: [1, 2], sorted: true },
-    { name: '$skip пропускает начало', query: { $orderby: 'id asc', $skip: '2' }, expected: [3, 4], sorted: true },
+    {
+      name: '$top ограничивает выдачу',
+      query: { $orderby: 'id asc', $top: '2' },
+      expected: [1, 2],
+      sorted: true,
+    },
+    {
+      name: '$skip пропускает начало',
+      query: { $orderby: 'id asc', $skip: '2' },
+      expected: [3, 4],
+      sorted: true,
+    },
     {
       name: '$top и $skip вместе',
       query: { $orderby: 'id asc', $top: '2', $skip: '1' },

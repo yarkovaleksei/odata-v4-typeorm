@@ -410,9 +410,7 @@ describe('TypeOrmVisitor', () => {
      * невыполним, обязан получить отказ, а не чужие данные.
      */
     it('неизвестная функция вызывает ODataUnsupportedError', () => {
-      expect(() => processQuery('$filter=geo.distance(a, b) lt 1')).toThrow(
-        ODataUnsupportedError
-      );
+      expect(() => processQuery('$filter=geo.distance(a, b) lt 1')).toThrow(ODataUnsupportedError);
     });
 
     it('ошибка содержит имя неподдержанной возможности', () => {

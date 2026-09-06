@@ -71,9 +71,7 @@ export function hasNull(rows: Row[], name: string): boolean {
  * вернуло бы всё и ничего не показало.
  */
 export function maxValueOf(rows: Row[], name: string): number | undefined {
-  const values = rows
-    .map((row) => Number(row[name]))
-    .filter((value) => Number.isFinite(value));
+  const values = rows.map((row) => Number(row[name])).filter((value) => Number.isFinite(value));
 
   return values.length ? Math.max(...values) : undefined;
 }

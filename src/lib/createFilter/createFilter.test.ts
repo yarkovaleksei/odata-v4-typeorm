@@ -80,9 +80,9 @@ describe('createFilter', () => {
       expect(createFilter('length(name) gt 3', { alias: 'u', dialect: 'mssql' }).where).toContain(
         'LEN(u.name)'
       );
-      expect(createFilter('length(name) gt 3', { alias: 'u', dialect: 'postgres' }).where).toContain(
-        'LENGTH(u.name)'
-      );
+      expect(
+        createFilter('length(name) gt 3', { alias: 'u', dialect: 'postgres' }).where
+      ).toContain('LENGTH(u.name)');
     });
   });
 

@@ -73,8 +73,7 @@ function classifyError(error: unknown, exposeErrors: boolean): ErrorResponse {
 
   return {
     status: 500,
-    message:
-      exposeErrors && error instanceof Error ? error.message : 'Internal server error.',
+    message: exposeErrors && error instanceof Error ? error.message : 'Internal server error.',
   };
 }
 

@@ -50,9 +50,7 @@ export function createQuery(odataQuery: string | Token, options: SqlOptions): Ty
 
   const visitor = new TypeOrmVisitor(options);
   // Строка парсится в дерево токенов; если передан Token — повторный разбор не нужен.
-  const ast: Token = <Token>(
-    (typeof odataQuery == 'string' ? parseOrThrow(odataQuery) : odataQuery)
-  );
+  const ast: Token = <Token>(typeof odataQuery == 'string' ? parseOrThrow(odataQuery) : odataQuery);
   const visit = visitor.Visit(ast);
   // asType() обязателен: он приводит плейсхолдеры к формату TypeORM (`?` → `:pN`).
   const type = visit.asType();

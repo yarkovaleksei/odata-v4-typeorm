@@ -33,8 +33,28 @@ jobs:
       - name: Run ESLint
         run: yarn lint
 
+      # Prettier три года лежал в репозитории конфигом без самого пакета: формат
+      # ни во что не упирался и разъезжался. Документация из проверки исключена
+      # намеренно — см. `.prettierignore`.
+      - name: Check formatting
+        run: yarn format:check
+
+      # Документация описывает контракт, а гниёт молча: переименованный файл, убранный
+      # экспорт или исчезнувший скрипт не ломают ни тесты, ни линтер. Проверка на одной
+      # версии Node: она читает файлы, а не исполняет код библиотеки.
+      - name: Check documentation
+        if: matrix.node-version == '22.x'
+        run: yarn docs:check
+
       - name: Run unit tests
         run: yarn test:unit
+
+      # Покрытие считается один раз, а не на каждой версии Node: оно зависит от кода,
+      # а не от рантайма, и тройной прогон с инструментированием только замедлил бы CI.
+      # Пороги заданы в jest.config.js — там же объяснено, почему именно такие.
+      - name: Check coverage thresholds
+        if: matrix.node-version == '22.x'
+        run: yarn test:coverage
 
       - name: Run build library
         run: yarn build

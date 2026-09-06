@@ -12,14 +12,7 @@
 import type { SchemaField } from './types.js';
 
 /** Категория поля: по ней выбирается уместное выражение. */
-export type FieldKind =
-  | 'string'
-  | 'guid'
-  | 'number'
-  | 'boolean'
-  | 'datetime'
-  | 'time'
-  | 'other';
+export type FieldKind = 'string' | 'guid' | 'number' | 'boolean' | 'datetime' | 'time' | 'other';
 
 const EDM_KINDS: Record<Exclude<FieldKind, 'other'>, readonly string[]> = {
   string: ['Edm.String'],

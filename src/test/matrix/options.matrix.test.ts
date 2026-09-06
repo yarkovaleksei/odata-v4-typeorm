@@ -332,9 +332,9 @@ describe('$search и имена колонок, отличные от имён �
   });
 
   it('$orderby по колонке со snake_case-именем работает', async () => {
-    expect(await authorIds({ $orderby: 'registeredAt asc', $filter: 'registeredAt ne null' })).toEqual(
-      [1, 2, 4]
-    );
+    expect(
+      await authorIds({ $orderby: 'registeredAt asc', $filter: 'registeredAt ne null' })
+    ).toEqual([1, 2, 4]);
   });
 });
 
@@ -378,7 +378,9 @@ describe('колонки с select: false', () => {
   });
 
   it('обычные колонки по-прежнему доступны', async () => {
-    const result = unwrap<User>((await query({ $select: 'id,name', $orderby: 'id asc' })) as User[]);
+    const result = unwrap<User>(
+      (await query({ $select: 'id,name', $orderby: 'id asc' })) as User[]
+    );
 
     expect(result[0]).toEqual({ id: 1, name: 'Alice' });
   });

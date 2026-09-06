@@ -18,14 +18,7 @@
  */
 import { kindOf } from './edm.js';
 import { findRelationTarget } from './schema.js';
-import {
-  fragmentOf,
-  hasNull,
-  maxValueOf,
-  quote,
-  relationValueOf,
-  valueOf,
-} from './samples.js';
+import { fragmentOf, hasNull, maxValueOf, quote, relationValueOf, valueOf } from './samples.js';
 import type { Example, QueryDraft, Row, SchemaResource } from './types.js';
 
 /**
@@ -202,7 +195,11 @@ export function generateExamples(
   // несуществующее поле и недопустимое значение параметра дают 400, а не тихую подмену
   // результата. Ради этого примеры-отказы и держатся на видном месте.
   if (collection) {
-    add('Лямбда any — не поддерживается', { $filter: `${collection.name}/any(x: x/id eq 1)` }, true);
+    add(
+      'Лямбда any — не поддерживается',
+      { $filter: `${collection.name}/any(x: x/id eq 1)` },
+      true
+    );
   }
 
   add('Несуществующее поле', { $filter: 'nonexistent eq 1' }, true);

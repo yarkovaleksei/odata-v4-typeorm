@@ -155,13 +155,7 @@ function assertSkip(skip: number): void {
  * в TypeORM: для них построитель заранее бросает `OffsetWithoutLimitNotSupportedError`.
  * PostgreSQL такой запрос принимает, SQLite подставляет `LIMIT -1`.
  */
-const DRIVERS_REQUIRING_LIMIT_WITH_OFFSET = [
-  'mysql',
-  'mariadb',
-  'aurora-mysql',
-  'sap',
-  'spanner',
-];
+const DRIVERS_REQUIRING_LIMIT_WITH_OFFSET = ['mysql', 'mariadb', 'aurora-mysql', 'sap', 'spanner'];
 
 /**
  * Лимит-заглушка для `$skip` без `$top`.
@@ -184,9 +178,7 @@ function resolveOffsetGuardLimit<T extends ObjectLiteral>(
 
   const driver = queryBuilder.connection.options.type;
 
-  return DRIVERS_REQUIRING_LIMIT_WITH_OFFSET.includes(driver)
-    ? Number.MAX_SAFE_INTEGER
-    : undefined;
+  return DRIVERS_REQUIRING_LIMIT_WITH_OFFSET.includes(driver) ? Number.MAX_SAFE_INTEGER : undefined;
 }
 
 /**
@@ -213,7 +205,10 @@ function assertAllowed(
     if (forbidden.length) {
       // Наружу отдаём только то, что клиент и так прислал: имена запрошенных связей.
       // Разрешённый список не раскрываем — это подсказка для перебора схемы.
-      throw new ODataInvalidQueryError('$expand', `navigation not allowed: ${forbidden.join(', ')}`);
+      throw new ODataInvalidQueryError(
+        '$expand',
+        `navigation not allowed: ${forbidden.join(', ')}`
+      );
     }
   }
 

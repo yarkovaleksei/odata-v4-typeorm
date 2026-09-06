@@ -110,7 +110,8 @@ function describeResource(name: ResourceName) {
       .filter((column) => !column.relationMetadata && column.isSelect)
       .map((column) => ({
         name: column.propertyName,
-        type: typeof column.type === 'function' ? column.type.name.toLowerCase() : String(column.type),
+        type:
+          typeof column.type === 'function' ? column.type.name.toLowerCase() : String(column.type),
         edmType: resolveEdmType(column),
         nullable: column.isNullable,
       })),
