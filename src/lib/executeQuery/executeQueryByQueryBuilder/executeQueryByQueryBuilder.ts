@@ -25,6 +25,7 @@ import type { QueryParams } from '../../types';
 import { mapToObject } from '../mapToObject';
 import { processIncludes } from '../processIncludes';
 import { processSearch } from '../processSearch';
+import { createRelationResolver } from '../relationSource';
 import { queryToOdataString } from '../queryToOdataString';
 import type { ExecuteQueryOptions, GetManyResponse } from '../types';
 import { parseQueryParams } from './parseQueryParams';
@@ -258,7 +259,15 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   const { $search, ...parsedQueryWithoutSearch } = parseQueryParams(query);
 
   // Нормализуем опции: alias берём из options, иначе — из корневого алиаса самого QueryBuilder.
-  const { maxTop, allowedFields, allowedExpands } = options ?? {};
+  const {
+    maxTop,
+    allowedFields,
+    allowedExpands,
+    searchFields,
+    searchMode,
+    searchLanguage,
+    nestedPaginationInSql = true,
+  } = options ?? {};
   const alias = options?.alias || (inputQueryBuilder.expressionMap.mainAlias?.name ?? '');
 
   // Пагинацию проверяем до обращения к БД: смысла компилировать заведомо плохой запрос нет.
@@ -269,18 +278,20 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // Преобразуем параметры в OData-строку и затем в объект odataQuery.
   // Диалект берётся из подключения: от него зависит, какие SQL-функции подставлять
   // для функций OData (LENGTH против LEN, strftime против EXTRACT и т.д.).
+  // Метаданные сущности нужны для четырёх вещей: списка колонок SELECT по умолчанию,
+  // разрешения связей при обработке $expand, проверки невыбираемых колонок и подзапросов
+  // лямбда-операторов — последним нужны имена таблиц, которых компилятор OData не знает.
+  const metadata = resolveMetadata(inputQueryBuilder, alias);
+
   const odataString = queryToOdataString(parsedQueryWithoutSearch);
   const odataQuery = createQuery(odataString, {
     alias,
     dialect: inputQueryBuilder.connection.options.type,
+    resolveRelation: createRelationResolver(inputQueryBuilder.connection, metadata),
   });
 
   // Белые списки сверяем сразу после компиляции — до того, как что-либо попадёт в SQL.
   assertAllowed(odataQuery, allowedFields, allowedExpands);
-
-  // Метаданные сущности нужны для трёх вещей: списка колонок SELECT по умолчанию,
-  // разрешения связей при обработке $expand и проверки невыбираемых колонок.
-  const metadata = resolveMetadata(inputQueryBuilder, alias);
 
   assertNoHiddenFields(odataQuery, metadata);
 
@@ -347,12 +358,26 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
 
   // Разворачиваем дерево includes в LEFT JOIN'ы ($expand); сортировки связей допишутся
   // после корневой и будут упорядочивать записи внутри каждого родителя.
-  queryBuilder = processIncludes<T>(queryBuilder, odataQuery, alias, metadata);
+  //
+  // Сюда же переносится вложенная пагинация: `$expand=books($top=2)` превращается в условие
+  // с оконной функцией на ON соединения. Связи, для которых это удалось, попадают в
+  // `paginatedInSql` — их нельзя резать второй раз в памяти.
+  const paginatedInSql = new Set<TypeOrmVisitor>();
 
-  // $search: регистронезависимый LIKE по текстовым колонкам + точное равенство по числовым.
+  queryBuilder = processIncludes<T>(queryBuilder, odataQuery, alias, metadata, {
+    paginated: paginatedInSql,
+    enabled: nestedPaginationInSql,
+  });
+
+  // $search: выражение разбирается по грамматике OData (AND / OR / NOT, фразы, скобки),
+  // термы проверяются по колонкам корня либо по перечисленным в `searchFields` полям.
   // processSearch мутирует queryBuilder на месте и ничего не возвращает.
   if ($search) {
-    processSearch<T>(queryBuilder, metadata, $search, alias);
+    processSearch<T>(queryBuilder, metadata, $search, alias, {
+      fields: searchFields,
+      mode: searchMode,
+      language: searchLanguage,
+    });
   }
 
   // skip() вызывается ТОЛЬКО при ненулевом смещении.
@@ -387,10 +412,10 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
 
     return {
       // count считает корневые сущности и вложенной пагинацией не затрагивается.
-      items: applyNestedPagination(resultData[0], odataQuery.includes),
+      items: applyNestedPagination(resultData[0], odataQuery.includes, paginatedInSql),
       count: resultData[1],
     };
   }
 
-  return applyNestedPagination(await queryBuilder.getMany(), odataQuery.includes);
+  return applyNestedPagination(await queryBuilder.getMany(), odataQuery.includes, paginatedInSql);
 };

@@ -256,7 +256,11 @@ describe('классификация ошибок', () => {
   it.each([
     ['синтаксис', { $filter: '!!!' }, ODataParseError],
     ['неподдерживаемая функция', { $filter: 'geo.distance(a,b) lt 1' }, ODataUnsupportedError],
-    ['лямбда', { $filter: "books/any(b: b/title eq 'x')" }, ODataUnsupportedError],
+    [
+      'функция без трансляции',
+      { $filter: 'fractionalseconds(registeredAt) eq 1' },
+      ODataUnsupportedError,
+    ],
     ['отрицательный $top', { $top: '-1' }, ODataInvalidQueryError],
   ])('%s → типизированная клиентская ошибка', async (_name, query, expected) => {
     let caught: unknown;
@@ -271,7 +275,7 @@ describe('классификация ошибок', () => {
     expect(isODataClientError(caught)).toBe(true);
   });
 
-  it('ODataParseError сообщает позицию, если парсер её выдал', async () => {
+  it('ODataParseError указывает на сам сбойный символ', async () => {
     let caught: ODataParseError | undefined;
 
     try {
@@ -280,8 +284,10 @@ describe('классификация ошибок', () => {
       caught = e as ODataParseError;
     }
 
-    expect(caught?.position).toBe(0);
     expect(caught?.source).toContain('!!!');
+    // Позиция — начало непонятного фрагмента, а не начало строки: прежний парсер
+    // на любую ошибку отвечал `Fail at 0`, по которому нельзя было понять, где сбой.
+    expect(caught?.position).toBe((caught?.source ?? '').indexOf('!!!'));
   });
 
   it('ошибка СУБД не считается ошибкой библиотеки', async () => {

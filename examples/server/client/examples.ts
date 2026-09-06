@@ -87,6 +87,27 @@ export function generateExamples(
     }
   }
 
+  // Примеры с перечислением строятся по двум РАЗНЫМ значениям одного поля: со списком
+  // из одного элемента `in` неотличим от `eq`, а `OR` в `$search` — от обычного слова.
+  if (stringField) {
+    const distinct = [
+      ...new Set(
+        rows
+          .map((row) => row[stringField.name])
+          .filter((value): value is string => typeof value === 'string')
+      ),
+    ].slice(0, 2);
+
+    if (distinct.length === 2) {
+      add('Оператор in', {
+        $filter: `${stringField.name} in (${distinct.map((value) => quote(value)).join(',')})`,
+      });
+      add('Поиск по выражению ($search с OR)', {
+        $search: distinct.map((value) => `"${value}"`).join(' OR '),
+      });
+    }
+  }
+
   if (guidField) {
     const value = valueOf(rows, guidField.name);
 
@@ -133,9 +154,10 @@ export function generateExamples(
     add('Сравнение с null', { $filter: `${nullableField.name} eq null` });
     // Второе условие намеренно `ne null`, а не сравнение с числом: ключ бывает и UUID,
     // и тогда `id ge 1` — сравнение строки с числом, то есть ошибка уровня СУБД.
-    // Здесь важна только скобочная группировка, а не смысл второго условия.
-    add('Отрицание — нужны явные скобки', {
-      $filter: `(not (${nullableField.name} eq null)) and ${first} ne null`,
+    // Здесь важен приоритет `not`, а не смысл второго условия: отрицание относится
+    // только к первому, скобки вокруг него не нужны.
+    add('Отрицание с приоритетом', {
+      $filter: `not (${nullableField.name} eq null) and ${first} ne null`,
     });
   }
 
@@ -188,20 +210,27 @@ export function generateExamples(
     if (nested) {
       add('Три уровня $expand', { $expand: `${collection.name}($expand=${nested.name})` });
     }
+
+    // Лямбды не размножают корневые строки: они разворачиваются в EXISTS, а не в JOIN.
+    add('Лямбда any — коллекция непуста', { $filter: `${collection.name}/any()` });
+
+    const targetField = target?.fields.find((field) => kindOf(field) === 'number');
+
+    if (targetField) {
+      add('Лямбда any с условием', {
+        $filter: `${collection.name}/any(x: x/${targetField.name} ge 0)`,
+      });
+      add('Лямбда all', {
+        $filter: `${collection.name}/all(x: x/${targetField.name} ge 0)`,
+      });
+    }
   }
 
   // ── Отказы ────────────────────────────────────────────────────────────────
   // Библиотека никогда не выполняет запрос частично: непереводимая конструкция,
   // несуществующее поле и недопустимое значение параметра дают 400, а не тихую подмену
   // результата. Ради этого примеры-отказы и держатся на видном месте.
-  if (collection) {
-    add(
-      'Лямбда any — не поддерживается',
-      { $filter: `${collection.name}/any(x: x/id eq 1)` },
-      true
-    );
-  }
-
+  add('Функция без трансляции', { $filter: 'fractionalseconds(id) eq 1' }, true);
   add('Несуществующее поле', { $filter: 'nonexistent eq 1' }, true);
   add('Отрицательный $top', { $top: '-5' }, true);
 

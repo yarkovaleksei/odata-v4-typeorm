@@ -7,18 +7,29 @@
   "typings": "build/src/lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./build/src/lib/index.d.ts",
-      "require": "./build/src/lib/index.js",
-      "default": "./build/src/lib/index.js"
+      "import": {
+        "types": "./build/esm/src/lib/index.d.ts",
+        "default": "./build/esm/src/lib/index.js"
+      },
+      "require": {
+        "types": "./build/src/lib/index.d.ts",
+        "default": "./build/src/lib/index.js"
+      }
     },
     "./package.json": "./package.json"
   },
   "files": [
     "build/src/lib",
+    "build/esm/src/lib",
+    "build/esm/package.json",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
-    "docs"
+    "docs/README.md",
+    "docs/api.md",
+    "docs/recipes.md",
+    "docs/odata-support.md",
+    "docs/architecture.md"
   ],
   "engines": {
     "node": ">=20"
@@ -35,8 +46,11 @@
     "test:mysql": "TEST_DB=mysql jest",
     "test:coverage": "jest --coverage",
     "test:all": "yarn test:unit && yarn test:postgres && yarn test:mysql",
-    "verify": "yarn lint && yarn format:check && yarn docs:check && yarn test:unit && yarn build",
-    "build": "rm -rf ./build && tsc --project tsconfig.build.json",
+    "verify": "yarn lint && yarn format:check && yarn docs:check && yarn test:unit && yarn build && yarn build:check",
+    "build": "rm -rf ./build && yarn build:cjs && yarn build:esm",
+    "build:cjs": "tsc --project tsconfig.build.json",
+    "build:esm": "tsc --project tsconfig.esm.json && ts-node scripts/build-esm.ts",
+    "build:check": "ts-node scripts/check-package.ts",
     "docker:build": "docker compose build tests",
     "docker:test": "docker compose run --rm tests",
     "docker:test:all": "docker compose run --rm tests yarn test:all",
@@ -71,11 +85,7 @@
     "url": "https://github.com/yarkovaleksei/odata-v4-typeorm-improved/issues"
   },
   "homepage": "https://github.com/yarkovaleksei/odata-v4-typeorm-improved#readme",
-  "dependencies": {
-    "odata-v4-literal": "^0.1.1",
-    "odata-v4-parser": "^0.1.29",
-    "odata-v4-sql": "^0.1.2"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/express": "^5.0.6",

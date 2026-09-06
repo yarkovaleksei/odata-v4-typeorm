@@ -3705,29 +3705,6 @@ object-inspect@^1.13.3, object-inspect@^1.13.4:
   resolved "https://registry.npmjs.org/object-inspect/-/object-inspect-1.13.4.tgz#8375265e21bc20d0fa582c22e1b13485d6e00213"
   integrity sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==
 
-odata-v4-literal@^0.1.0, odata-v4-literal@^0.1.1:
-  version "0.1.1"
-  resolved "https://registry.npmjs.org/odata-v4-literal/-/odata-v4-literal-0.1.1.tgz#47c017b11294c0fc40c9d87d9266425a5671168f"
-  integrity sha512-xX9IrLywUmFI6In/AgT0Yy0DpBgW/Y7N9Q3iSfbqOjVyE2z8PvWflx9kgPBiCGmpZFw4dG2TKGlVRd2jgD8+vg==
-
-odata-v4-parser@0.1.13:
-  version "0.1.13"
-  resolved "https://registry.npmjs.org/odata-v4-parser/-/odata-v4-parser-0.1.13.tgz#4b5cfef0381cc39c1ca0d53c0bbc825cc655b492"
-  integrity sha512-JjgP/Dt18zpS0uLozcqGGVOcmfSPrsLuDj/r1UQ4siyY2KiIZ2h++0tVwefLKcLMKWF/50UVF5qRfVXPfzCkcg==
-
-odata-v4-parser@^0.1.29:
-  version "0.1.29"
-  resolved "https://registry.npmjs.org/odata-v4-parser/-/odata-v4-parser-0.1.29.tgz#49e466037dbc4fc088572a2deae822fc14e6c137"
-  integrity sha512-7ZsqxcMbGAqKSBme0+lul7g9K52RadGYU3WvYwDdduJNfnduSL59w4OEskvEzWHZMcPRqPnD9XtuO7Rpl+B3jA==
-
-odata-v4-sql@^0.1.2:
-  version "0.1.2"
-  resolved "https://registry.npmjs.org/odata-v4-sql/-/odata-v4-sql-0.1.2.tgz#6b5d10ac6dd89f2087093b7cefaa511ee7af9ea9"
-  integrity sha512-Y3S2N2C+W5pRlXsnuZBhGZ+ZlbkBxjjzwi8I6MKRmjpqil1BOs0YIUQWYCp70WmP/psp//hOJHpBRc8iFgomTg==
-  dependencies:
-    odata-v4-literal "^0.1.0"
-    odata-v4-parser "0.1.13"
-
 on-finished@^2.4.1:
   version "2.4.1"
   resolved "https://registry.npmjs.org/on-finished/-/on-finished-2.4.1.tgz#58c8c44116e54845ad57f14ab10b03533184ac3f"

@@ -1,24 +1,49 @@
 /**
  * @file Реализация параметра `$search` на уровне SQL TypeORM.
  *
- * Спецификация OData описывает `$search` как полнотекстовый поиск с собственным синтаксисом
- * (`AND`, `OR`, `NOT`, кавычки). Здесь реализована намеренно упрощённая семантика: вся строка
- * целиком ищется как одна подстрока по всем скалярным колонкам корневой сущности.
+ * Выражение разбирается по грамматике OData (`parseSearch`), а здесь дерево превращается
+ * в SQL: каждый терм проверяется по набору колонок, а `AND` / `OR` / `NOT` и скобки
+ * переносятся в условие один в один.
  *
- * По метаданным сущности собираются текстовые колонки (LIKE по подстроке, регистронезависимо)
- * и числовые (точное равенство, только если строка поиска приводится к числу через `Number`).
- * Условия объединяются через `OR` внутри одной группы `Brackets`, затем добавляются как `andWhere` —
- * скобки здесь обязательны, иначе `OR` «растёк» бы по остальным условиям запроса и
- * `$filter` перестал бы ограничивать выдачу.
+ * ГДЕ ИСКАТЬ. По умолчанию — все скалярные колонки корневой сущности: текстовые по подстроке
+ * (регистронезависимо), числовые по точному равенству. Опция `searchFields` сужает набор
+ * и позволяет указать поля связей путём от корня (`'author/name'`). Подзапрос по связи строит
+ * общий модуль `relationSource` — тот же, которым пользуются лямбда-операторы `$filter`.
  *
- * ОГРАНИЧЕНИЯ:
- * - поиск только по корневой сущности; колонки заджойненных через `$expand` связей не участвуют;
- * - `LIKE` по всем текстовым колонкам без индексов — последовательное сканирование таблицы.
- *   На больших таблицах вместо `$search` стоит подключать полнотекстовый поиск СУБД.
+ * NULL И ОТРИЦАНИЕ. Каждое сравнение защищено проверкой `IS NOT NULL`. Без неё `LIKE` по
+ * пустой колонке даёт `NULL`, а не `FALSE`, и `NOT` над таким условием отбрасывал бы строки,
+ * которые обязан оставлять: «не содержит „ada“» верно и для записи, где поле пустое.
+ *
+ * ЭКРАНИРОВАНИЕ ШАБЛОНА. `%` и `_` в строке поиска экранируются: запрос `$search=50%`
+ * ищет именно «50%», а не «50 и что угодно дальше». Экранирующим символом взят `!`,
+ * а не привычная обратная косая черта, из-за литералов: `'\'` в MySQL — незакрытая строка,
+ * а `'\\'` в PostgreSQL — уже два символа, и `ESCAPE` такой литерал не принимает.
+ *
+ * ДВА РЕЖИМА СРАВНЕНИЯ. По умолчанию (`'like'`) ищется подстрока: находит середину слова,
+ * но не пользуется индексами — это последовательное сканирование таблицы. Режим `'fulltext'`
+ * переключает сравнение на полнотекстовый поиск СУБД: `to_tsvector @@ plainto_tsquery`
+ * в PostgreSQL, `MATCH … AGAINST` в MySQL. Он ищет слова целиком (и учитывает словоформы,
+ * если задан язык), зато опирается на индекс.
+ *
+ * Структуру выражения — `AND`, `OR`, `NOT`, скобки — в обоих режимах задаёт разобранное дерево,
+ * а не строка, которую отдали бы движку поиска: иначе `$search` вёл бы себя по-разному
+ * на разных СУБД. Значение терма поэтому обезвреживается: в MySQL оно берётся в кавычки,
+ * чтобы `-слово` не было понято как оператор булева режима.
+ *
+ * ГДЕ `'fulltext'` НЕ ПРИМЕНЯЕТСЯ. На SQLite (полнотекстовый поиск там — отдельная виртуальная
+ * таблица FTS5) и на MS SQL (нужен полнотекстовый каталог) режим молча остаётся `'like'`:
+ * один и тот же код обычно работает на SQLite в разработке и на PostgreSQL в продакшене,
+ * и падать на этом различии он не должен. В MySQL колонка обязана входить в индекс `FULLTEXT`,
+ * иначе СУБД отвергнет запрос — это видно сразу и чинится миграцией.
  */
-import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
+import type { DataSource, EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 import { Brackets } from 'typeorm';
+
+import { normalizeDialect } from '../../dialect';
+import { ODataInvalidQueryError } from '../../errors';
 import type { QueryParams } from '../../types';
+import { parseSearch, type SearchNode } from '../parseSearch';
+import { buildRelationSource } from '../relationSource';
 
 /**
  * Имена типов колонок TypeORM/БД, для которых допустим поиск подстроки через `LIKE`.
@@ -77,127 +102,313 @@ export const searchableNumberColumnTypes = [
 export type SearchableTextColumnType = (typeof searchableTextColumnTypes)[number];
 export type SearchableNumberColumnType = (typeof searchableNumberColumnTypes)[number];
 
+/** Символ экранирования шаблона `LIKE`; см. шапку файла. */
+const LIKE_ESCAPE = '!';
+
 /**
- * Добавляет к `queryBuilder` условия поиска по всем подходящим скалярным колонкам корневой сущности.
+ * Одна цель поиска: выражение колонки и способ подставить его в условие.
  *
- * @param queryBuilder - построитель, который мутируется на месте (функция ничего не возвращает).
- * @param metadata - метаданные корневой сущности (список колонок и их типов).
- * @param $search - строка поиска (уже может быть обрезана снаружи; пустая — ранний выход).
- * @param alias - SQL-алиас корневой таблицы в запросе.
- *
- * @example
- * // Для сущности User(id: int, name: varchar, email: varchar) и $search='42'
- * // получится примерно такой фрагмент:
- * //   AND (
- * //     LOWER("User"."name")  LIKE LOWER(:textSearchValue) OR
- * //     LOWER("User"."email") LIKE LOWER(:textSearchValue) OR
- * //     "User"."id" = :numberSearchValue
- * //   )
- * // с параметрами { textSearchValue: '%42%', numberSearchValue: 42 }
+ * @property expression - готовое выражение колонки в SQL, уже с алиасом.
+ * @property kind - как сравнивать: по подстроке или на равенство.
+ * @property wrap - обёртка вокруг условия. Для колонки корня — тождественная, для колонки
+ *   связи — цепочка `EXISTS (SELECT 1 FROM … WHERE … AND <условие>)`.
  */
-export const processSearch = <T extends ObjectLiteral = ObjectLiteral>(
-  queryBuilder: SelectQueryBuilder<T>,
-  metadata: EntityMetadata,
-  $search: Required<QueryParams>['$search'],
-  alias: string
-) => {
-  if (!$search || $search.trim() === '') {
-    return;
+interface SearchTarget {
+  expression: string;
+  kind: 'text' | 'number';
+  wrap: (condition: string) => string;
+}
+
+/** К какому виду поиска пригодна колонка; `undefined` — ни к какому. */
+function columnKind(column: EntityMetadata['columns'][number]): 'text' | 'number' | undefined {
+  // Тип колонки в метаданных бывает и строкой ('varchar'), и конструктором (String, Number) —
+  // для SQLite TypeORM выводит именно конструкторы. Приводим оба варианта к строке.
+  const type = typeof column.type === 'function' ? column.type.name : column.type;
+  const typeLower = type?.toLowerCase();
+
+  if (searchableTextColumnTypes.includes(typeLower as SearchableTextColumnType)) {
+    return 'text';
   }
 
-  const searchValue = $search.trim();
+  if (searchableNumberColumnTypes.includes(typeLower as SearchableNumberColumnType)) {
+    return 'number';
+  }
 
-  const textColumns: string[] = [];
-  const numberColumns: string[] = [];
+  return undefined;
+}
 
-  /**
-   * Полное имя колонки в SQL: `"User"."first_name"`.
-   *
-   * Два принципиальных момента:
-   *
-   * 1. Берётся `databaseName`, а не `propertyName`. Это разные вещи, как только в проекте
-   *    появляется `namingStrategy`: свойство `firstName` живёт в колонке `first_name`.
-   *    Раньше в SQL уходило имя свойства, и `$search` падал с `no such column: Account.firstName`.
-   *
-   * 2. Экранирование делает драйвер, а не жёстко зашитые двойные кавычки. `"…"` — это
-   *    ANSI/PostgreSQL/SQLite; MySQL по умолчанию понимает под ними строковый литерал,
-   *    а не идентификатор, из-за чего условие там просто не работало.
-   *
-   * Экранирование обязательно и по другой причине: без кавычек TypeORM сам подставил бы
-   * имя колонки по метаданным, но с ними — уже нет, поэтому имя должно быть окончательным.
-   */
-  const escape = (identifier: string) => queryBuilder.connection.driver.escape(identifier);
-  const qualify = (databaseName: string) => `${escape(alias)}.${escape(databaseName)}`;
+/**
+ * Разрешает путь `'author/name'` в цель поиска.
+ *
+ * @throws {ODataInvalidQueryError} путь не существует либо ведёт к колонке, по которой
+ *   искать нельзя (дата, UUID, JSON). Ошибка, а не молчаливый пропуск: указанное в настройках
+ *   поле, по которому не ищут, — это опечатка разработчика, и её лучше увидеть сразу.
+ */
+function resolveField(
+  connection: DataSource,
+  metadata: EntityMetadata,
+  rootAlias: string,
+  path: string,
+  index: number
+): SearchTarget {
+  const escape = (name: string) => connection.driver.escape(name);
+  const segments = path.split('/');
+  const field = segments.pop() as string;
+
+  let current = metadata;
+  let alias = rootAlias;
+  let wrap: (condition: string) => string = (condition) => condition;
+
+  if (segments.length > 0) {
+    const childAlias = `${rootAlias}__s${index}`;
+    const source = buildRelationSource(connection, metadata, segments, rootAlias, childAlias);
+
+    if (!source) {
+      throw new ODataInvalidQueryError('$search', `unknown search field: ${path}`);
+    }
+
+    current = source.metadata;
+    alias = childAlias;
+    wrap = (condition) =>
+      `EXISTS (SELECT 1 FROM ${source.from} WHERE ${source.where} AND ${condition})`;
+  }
+
+  const column = current.columns.find((candidate) => candidate.propertyPath === field);
+
+  if (!column) {
+    throw new ODataInvalidQueryError('$search', `unknown search field: ${path}`);
+  }
+
+  const kind = columnKind(column);
+
+  if (!kind) {
+    throw new ODataInvalidQueryError('$search', `field is not searchable: ${path}`);
+  }
+
+  return { expression: `${escape(alias)}.${escape(column.databaseName)}`, kind, wrap };
+}
+
+/** Скалярные колонки корневой сущности — набор по умолчанию. */
+function rootTargets(
+  connection: DataSource,
+  metadata: EntityMetadata,
+  alias: string
+): SearchTarget[] {
+  const escape = (name: string) => connection.driver.escape(name);
+  const targets: SearchTarget[] = [];
 
   for (const column of metadata.columns) {
-    // Тип колонки в метаданных бывает и строкой ('varchar'), и конструктором (String, Number) —
-    // для SQLite TypeORM выводит именно конструкторы. Приводим оба варианта к строке в нижнем регистре.
-    const type = typeof column.type === 'function' ? column.type.name : column.type;
-    const typeLower: SearchableTextColumnType | SearchableNumberColumnType = type?.toLowerCase();
-
     // Колонки связей (внешние ключи) пропускаем: их значения клиенту не показываются,
     // а поиск по ним даёт неожиданные совпадения по идентификаторам.
     if (column.relationMetadata) {
       continue;
     }
 
-    if (searchableTextColumnTypes.includes(typeLower as SearchableTextColumnType)) {
-      textColumns.push(qualify(column.databaseName));
-    } else if (searchableNumberColumnTypes.includes(typeLower as SearchableNumberColumnType)) {
-      numberColumns.push(qualify(column.databaseName));
+    const kind = columnKind(column);
+
+    if (!kind) {
+      continue;
     }
+
+    targets.push({
+      expression: `${escape(alias)}.${escape(column.databaseName)}`,
+      kind,
+      wrap: (condition) => condition,
+    });
   }
 
-  const conditions: string[] = [];
-  const parameters: Record<string, string | number> = {};
+  return targets;
+}
 
-  // Текстовые условия.
-  // Один общий параметр на все колонки (а не по параметру на колонку) — так короче SQL
-  // и меньше работы планировщику. LOWER() с обеих сторон даёт регистронезависимость
-  // независимо от collation базы; значение дополнительно приводится к нижнему регистру заранее,
-  // чтобы LOWER(:param) не зависел от локали сервера БД.
-  if (textColumns.length) {
-    parameters.textSearchValue = `%${searchValue.toLowerCase()}%`;
+/** Экранирует спецсимволы шаблона `LIKE`, чтобы `%` и `_` искались буквально. */
+function escapeLikePattern(value: string): string {
+  return value.replace(/[%_!]/g, (char) => `${LIKE_ESCAPE}${char}`);
+}
 
-    textColumns.forEach((column) => {
-      conditions.push(`LOWER(${column}) LIKE LOWER(:textSearchValue)`);
-    });
+/** Как сравнивать текст: подстрокой или полнотекстовым поиском СУБД. */
+export type SearchMode = 'like' | 'fulltext';
+
+/**
+ * Имя конфигурации полнотекстового поиска PostgreSQL — подставляется в SQL как есть,
+ * поэтому проверяется по строгому шаблону: параметром его передать нельзя, а конкатенация
+ * пользовательской строки в SQL без проверки была бы инъекцией.
+ */
+const FULLTEXT_LANGUAGE = /^[a-z_][a-z0-9_]*$/;
+
+/** Опции поиска. */
+export interface ProcessSearchOptions {
+  /**
+   * Поля, по которым идёт поиск: пути свойств от корня (`'name'`, `'author/name'`).
+   *
+   * Не заданы — берутся все скалярные колонки корневой сущности.
+   */
+  fields?: readonly string[];
+
+  /** Способ сравнения текста. @defaultValue `'like'` */
+  mode?: SearchMode;
+
+  /** Конфигурация полнотекстового поиска PostgreSQL. @defaultValue `'simple'` */
+  language?: string;
+}
+
+/**
+ * Добавляет к `queryBuilder` условия поиска по выражению `$search`.
+ *
+ * @param queryBuilder - построитель, который мутируется на месте (функция ничего не возвращает).
+ * @param metadata - метаданные корневой сущности (список колонок, типов и связей).
+ * @param $search - выражение поиска; пустое — ранний выход.
+ * @param alias - SQL-алиас корневой таблицы в запросе.
+ * @param options - какие поля участвуют в поиске.
+ *
+ * @throws {ODataInvalidQueryError} выражение синтаксически неверно либо в `fields` указано
+ *   несуществующее или непригодное для поиска поле.
+ *
+ * @example
+ * // $search=ada OR "grace hopper"
+ * //   AND (
+ * //     ("User"."name" IS NOT NULL AND LOWER("User"."name") LIKE :searchText0 ESCAPE '!')
+ * //     OR ("User"."name" IS NOT NULL AND LOWER("User"."name") LIKE :searchText1 ESCAPE '!')
+ * //   )
+ * // с параметрами { searchText0: '%ada%', searchText1: '%grace hopper%' }
+ */
+export const processSearch = <T extends ObjectLiteral = ObjectLiteral>(
+  queryBuilder: SelectQueryBuilder<T>,
+  metadata: EntityMetadata,
+  $search: Required<QueryParams>['$search'],
+  alias: string,
+  options: ProcessSearchOptions = {}
+) => {
+  const expression = parseSearch($search ?? '');
+
+  if (!expression) {
+    return;
+  }
+
+  const connection = queryBuilder.connection;
+  const dialect = normalizeDialect(connection.options.type);
+  const language = options.language ?? 'simple';
+
+  if (!FULLTEXT_LANGUAGE.test(language)) {
+    throw new ODataInvalidQueryError('$search', `invalid full-text language: ${language}`);
   }
 
   /**
-   * Числовые условия — только если строку поиска можно привести к числу через `Number`.
-   *
-   * Используется именно `Number`, а не `parseInt`/`parseFloat`: последние отрезают «хвост»
-   * (`parseInt('123a') === 123`) и дали бы ложные совпадения по числовым колонкам.
-   *
-   * @example
-   * $search=123    // numericValue = 123  → добавятся условия по числовым колонкам
-   * $search=123a   // numericValue = NaN  → числовые колонки пропускаются
+   * Полнотекстовый поиск используется, только если о нём попросили И СУБД его умеет
+   * на обычных колонках. SQLite (FTS5 — отдельная виртуальная таблица) и MS SQL
+   * (нужен полнотекстовый каталог) сюда не попадают: там остаётся `LIKE`.
    */
-  const numericValue = Number(searchValue);
+  const fulltext = options.mode === 'fulltext' && (dialect === 'postgres' || dialect === 'mysql');
 
-  if (!isNaN(numericValue) && numberColumns.length) {
-    parameters.numberSearchValue = numericValue;
+  const targets = options.fields
+    ? options.fields.map((path, index) => resolveField(connection, metadata, alias, path, index))
+    : rootTargets(connection, metadata, alias);
 
-    numberColumns.forEach((column) => {
-      conditions.push(`${column} = :numberSearchValue`);
-    });
+  // Подходящих колонок нет — не добавляем ничего. Альтернатива («не нашли — не вернём ничего»)
+  // сломала бы запросы к сущностям без текстовых полей, а так $search просто игнорируется.
+  if (targets.length === 0) {
+    return;
   }
 
-  // Если подходящих колонок не нашлось — не добавляем ничего. Альтернатива («не нашли — не вернём
-  // ничего») сломала бы запросы к сущностям без текстовых полей, а так $search просто игнорируется.
-  if (conditions.length) {
-    queryBuilder.andWhere(
-      new Brackets((qb) => {
-        conditions.forEach((condition, idx) => {
-          if (idx === 0) {
-            qb.where(condition);
-          } else {
-            qb.orWhere(condition);
-          }
-        });
-      }),
-      parameters
-    );
+  const parameters: Record<string, string | number> = {};
+  let termIndex = 0;
+
+  /**
+   * Сравнение текстовой колонки с искомым значением.
+   *
+   * `LIKE` ищет подстроку — так работает режим по умолчанию. Полнотекстовый поиск ищет слова
+   * целиком, зато пользуется индексом: `to_tsvector @@ plainto_tsquery` в PostgreSQL,
+   * `MATCH … AGAINST` в MySQL. Для фразы берутся их «фразовые» варианты, где важен ещё
+   * и порядок слов.
+   */
+  function match(target: SearchTarget, parameterName: string, phrase: boolean): string {
+    if (fulltext && dialect === 'postgres') {
+      const toQuery = phrase ? 'phraseto_tsquery' : 'plainto_tsquery';
+
+      return (
+        `to_tsvector('${language}', ${target.expression}) @@ ` +
+        `${toQuery}('${language}', :${parameterName})`
+      );
+    }
+
+    if (fulltext && dialect === 'mysql') {
+      return `MATCH(${target.expression}) AGAINST(:${parameterName} IN BOOLEAN MODE)`;
+    }
+
+    return `LOWER(${target.expression}) LIKE :${parameterName} ESCAPE '${LIKE_ESCAPE}'`;
   }
+
+  /** Условие для одного слова или фразы: совпадение хотя бы по одной цели поиска. */
+  function compileTerm(value: string, phrase: boolean): string {
+    const index = termIndex++;
+    const conditions: string[] = [];
+
+    const textName = `searchText${index}`;
+    const numberName = `searchNumber${index}`;
+
+    // Значение приводится к нижнему регистру заранее, чтобы LOWER(:param) не зависел
+    // от локали сервера БД.
+    if (fulltext) {
+      // MySQL: значение оборачивается в кавычки, чтобы `-слово` и `*` не были поняты как
+      // операторы булева режима — структуру выражения задаёт разобранное дерево, а не строка.
+      // PostgreSQL: `plainto_tsquery` и `phraseto_tsquery` операторов и не разбирают.
+      parameters[textName] = dialect === 'mysql' ? `"${value.replace(/"/g, ' ')}"` : value;
+    } else {
+      parameters[textName] = `%${escapeLikePattern(value.toLowerCase())}%`;
+    }
+
+    // Число ищется на точное равенство. Именно `Number`, а не `parseInt`: тот отрезает
+    // хвост (`parseInt('123a') === 123`) и дал бы ложные совпадения.
+    const numericValue = Number(value);
+    const numeric = value.trim() !== '' && !Number.isNaN(numericValue);
+
+    if (numeric) {
+      parameters[numberName] = numericValue;
+    }
+
+    for (const target of targets) {
+      if (target.kind === 'text') {
+        conditions.push(
+          target.wrap(`(${target.expression} IS NOT NULL AND ${match(target, textName, phrase)})`)
+        );
+      } else if (numeric) {
+        conditions.push(
+          target.wrap(
+            `(${target.expression} IS NOT NULL AND ${target.expression} = :${numberName})`
+          )
+        );
+      }
+    }
+
+    // Слово не сравнимо ни с одной целью (например ищем текст, а все поля числовые) —
+    // такой терм не совпадает ни с чем.
+    if (conditions.length === 0) {
+      return '1 = 0';
+    }
+
+    return `(${conditions.join(' OR ')})`;
+  }
+
+  function compile(node: SearchNode): string {
+    switch (node.type) {
+      case 'term':
+        return compileTerm(node.value, node.phrase);
+      case 'not':
+        return `NOT ${compile(node.operand)}`;
+      case 'and':
+        return `(${compile(node.left)} AND ${compile(node.right)})`;
+      case 'or':
+        return `(${compile(node.left)} OR ${compile(node.right)})`;
+    }
+  }
+
+  const condition = compile(expression);
+
+  // Скобки обязательны: без них OR внутри условия «растёк» бы по остальным условиям запроса,
+  // и $filter перестал бы ограничивать выдачу.
+  queryBuilder.andWhere(
+    new Brackets((qb) => {
+      qb.where(condition);
+    }),
+    parameters
+  );
 };

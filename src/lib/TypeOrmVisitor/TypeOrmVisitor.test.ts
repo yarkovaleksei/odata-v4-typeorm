@@ -1,6 +1,5 @@
-import { query } from 'odata-v4-parser';
-
 import { ODataUnsupportedError } from '../errors';
+import { parseQueryOptions } from '../odataParser';
 import type { SqlOptions } from '../types';
 import { TypeOrmVisitor } from './TypeOrmVisitor';
 
@@ -10,7 +9,7 @@ describe('TypeOrmVisitor', () => {
     options: Partial<SqlOptions> = {},
     table = 'users'
   ): { sql: string; parameters: Map<string, unknown> } {
-    const ast = query(odataQuery);
+    const ast = parseQueryOptions(odataQuery);
     const visitor = new TypeOrmVisitor({
       alias: 'u',
       useParameters: true,
@@ -108,7 +107,7 @@ describe('TypeOrmVisitor', () => {
       expect(sql).toContain('SELECT * FROM users WHERE 1 = 1 ORDER BY 1');
 
       const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true });
-      const ast = query('$expand=Profile');
+      const ast = parseQueryOptions('$expand=Profile');
 
       visitor.Visit(ast);
 
@@ -118,7 +117,7 @@ describe('TypeOrmVisitor', () => {
 
     it('должен обработать вложенный expand', () => {
       const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true });
-      const ast = query('$expand=profile($expand=avatar)');
+      const ast = parseQueryOptions('$expand=profile($expand=avatar)');
 
       visitor.Visit(ast);
 
@@ -474,7 +473,7 @@ describe('TypeOrmVisitor', () => {
   describe('Логика includes (expand)', () => {
     it('должен создать include посетитель для пути свойства в фильтре', () => {
       const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true });
-      const ast = query('$filter=Profile/Age gt 18');
+      const ast = parseQueryOptions('$filter=Profile/Age gt 18');
 
       visitor.Visit(ast);
 
@@ -490,7 +489,7 @@ describe('TypeOrmVisitor', () => {
 
     it('должен повторно использовать существующий include посетитель', () => {
       const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true });
-      const ast = query('$expand=Profile&$filter=Profile/Age gt 18');
+      const ast = parseQueryOptions('$expand=Profile&$filter=Profile/Age gt 18');
 
       visitor.Visit(ast);
 

@@ -12,7 +12,11 @@
  *   3   Alan      41   3.2     false     NULL                 'Codebreaker'
  *   4   Barbara   29   4.25    true      2022-03-20 12:00:00  NULL
  */
-import { authorIds, bookIds, runMatrix, type MatrixCase } from './helpers';
+import { ODataInvalidQueryError, ODataUnsupportedError } from '../../lib/errors';
+import { executeQuery } from '../../lib/executeQuery';
+import { Author } from '../fixtures';
+import { dataSource } from '../setup/dataSource';
+import { authorIds, bookIds, expectRejected, runMatrix, type MatrixCase } from './helpers';
 
 describe('$filter — операторы сравнения', () => {
   const cases: readonly MatrixCase[] = [
@@ -76,17 +80,28 @@ describe('$filter — логические операторы', () => {
       expected: [1, 4],
     },
     /**
-     * ОГРАНИЧЕНИЕ ПАРСЕРА. По спецификации OData v4 (раздел 5.1.1.9) приоритет `not` выше,
-     * чем у `and`, поэтому `not (X) and Y` обязано читаться как `(not X) and Y`.
-     * `odata-v4-parser` 0.1.29 разбирает это как `not (X and Y)` — то есть отрицание
-     * захватывает всё выражение целиком.
+     * ПРИОРИТЕТ `not`. По спецификации OData v4 (раздел 5.1.1.9) он выше, чем у `and`,
+     * поэтому `not (X) and Y` обязано читаться как `(not X) and Y`.
      *
-     * Здесь зафиксирован рабочий обходной путь: явные внешние скобки вокруг `not`.
-     * Починка приоритета требует форка парсера — см. `docs/roadmap.md`, задача R-18.
+     * Прежний парсер (`odata-v4-parser` 0.1.29) читал это как `not (X and Y)` — отрицание
+     * захватывало всё выражение, и обойти это можно было только внешними скобками. Свой
+     * парсер (R-18) приоритет соблюдает; обе записи теперь означают одно и то же,
+     * и обе проверяются, чтобы расхождение не вернулось незаметно.
      */
     {
-      name: 'not в сочетании с and (со скобками — обход ограничения парсера)',
+      name: 'not в сочетании с and',
+      query: { $filter: "not (name eq 'Ada') and age gt 40" },
+      expected: [2, 3],
+    },
+    {
+      name: 'not в сочетании с and — с лишними внешними скобками',
       query: { $filter: "(not (name eq 'Ada')) and age gt 40" },
+      expected: [2, 3],
+    },
+    {
+      name: 'not не захватывает следующий or',
+      // (not isActive) or age gt 44 → Alan (неактивен) и Grace (45).
+      query: { $filter: 'not (isActive eq true) or age gt 44' },
       expected: [2, 3],
     },
     {
@@ -97,6 +112,136 @@ describe('$filter — логические операторы', () => {
   ];
 
   runMatrix(authorIds, cases);
+});
+
+/**
+ * Оператор `in` (OData v4, раздел 5.1.1.10).
+ *
+ * До версии 2.0.0 не разбирался вовсе: прежний парсер отвечал `Unexpected character`.
+ */
+describe('$filter — оператор in', () => {
+  const cases: readonly MatrixCase[] = [
+    { name: 'по числам', query: { $filter: 'age in (36, 45)' }, expected: [1, 2] },
+    { name: 'по строкам', query: { $filter: "name in ('Ada', 'Alan')" }, expected: [1, 3] },
+    { name: 'значение вне списка', query: { $filter: 'age in (99)' }, expected: [] },
+    // Пустой список не совпадает ни с чем — а `IN ()` в SQL просто синтаксическая ошибка.
+    { name: 'пустой список', query: { $filter: 'age in ()' }, expected: [] },
+    {
+      name: 'вместе с другим условием',
+      query: { $filter: 'age in (36, 45, 41) and isActive eq true' },
+      expected: [1, 2],
+    },
+    { name: 'под отрицанием', query: { $filter: 'not (age in (36, 45))' }, expected: [3, 4] },
+  ];
+
+  runMatrix(authorIds, cases);
+
+  it('по полю связи', async () => {
+    expect((await bookIds({ $filter: "author/name in ('Ada', 'Grace')" })).sort()).toEqual([
+      1, 2, 3,
+    ]);
+  });
+});
+
+/**
+ * Лямбда-операторы `any` и `all` (OData v4, раздел 5.1.1.13).
+ *
+ * До версии 2.0.0 не работали: прежний парсер молча отбрасывал тело лямбды, и до библиотеки
+ * доходил обычный путь свойства — условие исчезало целиком. Оба разворачиваются
+ * в коррелированный подзапрос `EXISTS`, поэтому число корневых строк не меняется.
+ *
+ * Данные: у Ada книги 1 (300 страниц) и 2 (120), у Grace — 3 (450), у Alan — 4 (210),
+ * у Barbara книг нет.
+ */
+describe('$filter — лямбда-операторы', () => {
+  const cases: readonly MatrixCase[] = [
+    { name: 'any с условием', query: { $filter: 'books/any(b: b/pages gt 400)' }, expected: [2] },
+    {
+      name: 'any находит по любому элементу коллекции',
+      query: { $filter: 'books/any(b: b/pages lt 200)' },
+      expected: [1],
+    },
+    {
+      name: 'any без условия — коллекция непуста',
+      query: { $filter: 'books/any()' },
+      expected: [1, 2, 3],
+    },
+    {
+      name: 'all',
+      query: { $filter: 'books/all(b: b/pages gt 200)' },
+      // У Ada есть книга на 120 страниц — она выпадает; Barbara проходит: у неё книг нет,
+      // а «все элементы пустой коллекции удовлетворяют условию» истинно.
+      expected: [2, 3, 4],
+    },
+    {
+      name: 'any не размножает корневые строки',
+      // У Ada две подходящие книги, автор обязан вернуться один раз.
+      query: { $filter: 'books/any(b: b/pages gt 100)' },
+      expected: [1, 2, 3],
+    },
+    {
+      name: 'any вместе с обычным условием',
+      query: { $filter: "name eq 'Ada' and books/any(b: b/pages gt 200)" },
+      expected: [1],
+    },
+    {
+      name: 'отрицание лямбды',
+      query: { $filter: 'not books/any(b: b/pages gt 400)' },
+      expected: [1, 3, 4],
+    },
+    {
+      name: 'путь до коллекции через две связи',
+      query: { $filter: 'books/reviews/any(r: r/score eq 5)' },
+      expected: [1, 2],
+    },
+    {
+      name: 'вложенная лямбда',
+      query: { $filter: 'books/any(b: b/reviews/any(r: r/score eq 5))' },
+      expected: [1, 2],
+    },
+    {
+      name: 'тело сравнивает поле связи с полем внешнего уровня',
+      query: { $filter: 'books/any(b: b/pages gt age)' },
+      expected: [1, 2, 3],
+    },
+  ];
+
+  runMatrix(authorIds, cases);
+
+  it('any по связи «многие ко многим»', async () => {
+    expect((await bookIds({ $filter: "tags/any(t: t/label eq 'classic')" })).sort()).toEqual([
+      1, 3,
+    ]);
+  });
+
+  it('путь через связь внутри тела отвергается понятной ошибкой', async () => {
+    const error = await expectRejected(authorIds, {
+      $filter: "books/any(b: b/author/name eq 'Ada')",
+    });
+
+    expect(error).toBeInstanceOf(ODataUnsupportedError);
+  });
+
+  it('лямбда учитывается белым списком связей', async () => {
+    // Иначе `allowedExpands` не закрывал бы доступ к связанной сущности через $filter.
+    await expect(
+      executeQuery(
+        dataSource.getRepository(Author),
+        { $filter: 'books/any(b: b/pages gt 100)' },
+        { alias: 'Author', allowedExpands: ['reviews'] }
+      )
+    ).rejects.toBeInstanceOf(ODataInvalidQueryError);
+  });
+
+  it('поле внутри лямбды учитывается белым списком полей', async () => {
+    await expect(
+      executeQuery(
+        dataSource.getRepository(Author),
+        { $filter: 'books/any(b: b/pages gt 100)' },
+        { alias: 'Author', allowedFields: ['name'], allowedExpands: ['books'] }
+      )
+    ).rejects.toBeInstanceOf(ODataInvalidQueryError);
+  });
 });
 
 describe('$filter — арифметика', () => {

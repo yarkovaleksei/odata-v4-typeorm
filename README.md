@@ -48,7 +48,8 @@ yarn add odata-v4-typeorm-improved
 npm install typeorm
 ```
 
-Требуется Node.js 20 или новее.
+Требуется Node.js 20 или новее. Пакет публикуется в двух форматах — CommonJS и модули ES, —
+поэтому одинаково работает и с `require`, и с `import`.
 
 ## Попробовать вживую
 
@@ -70,7 +71,7 @@ yarn server
 Там же отдаётся схема сервиса: <http://localhost:3001/api/$metadata> — готовый документ
 CSDL XML, который можно скормить клиенту OData как есть.
 
-Там же лежит коллекция Postman на 51 запрос: [examples/postman/](./examples/postman/).
+Там же лежит коллекция Postman на 62 запроса: [examples/postman/](./examples/postman/).
 
 ## Быстрый старт
 
@@ -136,16 +137,17 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc&\$count=true"
 
 | Опция | Статус | Пример |
 |---|---|---|
-| `$filter` | ✅ | `$filter=name eq 'Alice' and id gt 10` |
+| `$filter` | ✅ | `$filter=name eq 'Alice' and posts/any(p: p/title eq 'x')` |
 | `$select` | ✅ | `$select=id,name` — в том числе `$select=author/name` |
 | `$orderby` | ✅ | `$orderby=name desc,id asc` |
 | `$top` / `$skip` | ✅ | `$top=20&$skip=40` |
 | `$count` | ✅ | `$count=true` — по умолчанию выключен, ответ тогда обычный массив |
-| `$expand` | ⚠️ | `$expand=posts($select=id,title;$top=2)` — вложенный срез делается после запроса, не в SQL |
-| `$search` | ⚠️ | `$search=alice` — упрощённая семантика, только корневая сущность |
+| `$expand` | ✅ | `$expand=posts($select=id,title;$top=2)` — вложенная страница вырезается в SQL оконной функцией |
+| `$search` | ✅ | `$search=(ada OR grace) NOT "computer science"` — грамматика OData целиком |
 
 В `$filter` поддержаны все операторы сравнения, логика (`and` / `or` / `not` / скобки),
-арифметика (`add`, `sub`, `mul`, `div`, `mod`, унарный минус), `null` → `IS NULL`,
+оператор `in`, лямбды `any` / `all` по связям, арифметика (`add`, `sub`, `mul`, `div`, `mod`,
+унарный минус), `null` → `IS NULL`,
 пути по связям (`author/name`) и функции: `contains`, `startswith`, `endswith`, `tolower`,
 `toupper`, `trim`, `length`, `indexof`, `substring`, `concat`, `round`, `floor`, `ceiling`,
 `year` / `month` / `day` / `hour` / `minute` / `second`, `date`, `time`, `now`.
@@ -157,7 +159,7 @@ SQL для функций подбирается под вашу СУБД авт
 тот самый, который разбирают `ra-data-odata-server`, `@odata/client` и Excel:
 [Схема сервиса](#схема-сервиса-metadata-в-xml).
 
-**Не поддерживаются:** `in`, лямбды `any` / `all`, `replace`, `cast`, `isof`,
+**Не поддерживаются:** `replace`, `cast`, `isof`,
 `mindatetime` / `maxdatetime`, `totalseconds`, геопространственные функции, `$apply`,
 `$compute`, `$levels`, `$skiptoken`. Такой запрос не выполняется молча — он отвергается
 с `ODataUnsupportedError`.
@@ -356,53 +358,8 @@ connection.query(`SELECT * FROM users WHERE ${compiled.where}`, [42]);
 
 ## Примеры OData-запросов
 
-Для сущности `User { id, name, email, posts: Post[] }`:
-
-```bash
-# Фильтрация
-GET /api/users?$filter=name eq 'Alice'
-GET /api/users?$filter=id gt 10 and id lt 100
-GET /api/users?$filter=(name eq 'Alice' or name eq 'Bob') and id gt 1
-GET /api/users?$filter=email eq null
-GET /api/users?$filter=name ne 'Alice'
-
-# Строковые функции
-GET /api/users?$filter=contains(name,'ali')
-GET /api/users?$filter=startswith(email,'admin')
-GET /api/users?$filter=endswith(email,'.com')
-GET /api/users?$filter=tolower(name) eq 'alice'
-
-# Выборка полей и сортировка
-GET /api/users?$select=id,name
-GET /api/users?$orderby=name asc
-GET /api/users?$orderby=name desc,id asc
-
-# Пагинация
-GET /api/users?$top=20&$skip=40
-GET /api/users?$top=20&$count=false      # ответ — массив, без счётчика
-GET /api/users?$top=0&$count=true        # только счётчик, без строк
-
-# Логика и арифметика
-GET /api/users?$filter=(not (name eq 'Alice')) and id gt 1
-GET /api/users?$filter=id mul 2 eq 10
-GET /api/users?$filter=length(name) gt 3
-
-# Связи
-GET /api/users?$expand=posts
-GET /api/users?$expand=posts($select=id,title)
-GET /api/users?$expand=posts($orderby=id desc)
-GET /api/users?$expand=posts($orderby=id desc;$top=3)   # по три последних поста на пользователя
-GET /api/users?$expand=posts($expand=comments)
-
-# Фильтр по полю связи (без одновременного $expand той же связи)
-GET /api/users?$filter=posts/title eq 'Hello'
-
-# Поиск по всем скалярным колонкам
-GET /api/users?$search=alice
-
-# Комбинация
-GET /api/users?$filter=id gt 1&$select=id,name&$orderby=name asc&$top=10
-```
+Готовая шпаргалка по всем поддержанным конструкциям — от фильтров и функций до лямбд
+и вложенной пагинации: [docs/recipes.md](./docs/recipes.md#примеры-odata-запросов).
 
 В реальных вызовах не забывайте про URL-кодирование (`$` → `%24`, пробел → `%20`).
 В оболочке `$` нужно экранировать:
@@ -512,23 +469,22 @@ try {
 Перед внедрением стоит знать. Полный разбор с воспроизведением — в
 [docs/audit.md](./docs/audit.md).
 
-**Приоритет `not` ниже, чем требует спецификация.** `odata-v4-parser` разбирает
-`not (X) and Y` как `not (X and Y)`. Ставьте явные скобки:
+**Не поддерживается:** `replace`, `cast`, `isof`, геопространственные функции, `$apply`,
+`$compute`, `$levels`, `$skiptoken`. Все эти случаи отвергаются явной ошибкой, а не
+выполняются частично.
 
-```bash
-# ❌ читается как not (X and Y)
-GET /api/users?$filter=not (name eq 'Alice') and id gt 10
-# ✅ явные внешние скобки
-GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
-```
+**Лямбды `any` / `all` не читают путь через связь внутри тела.** `books/any(b: b/pages gt 100)`
+работает, `books/any(b: b/author/name eq 'Ada')` — нет: это потребовало бы ещё одного
+соединения внутри подзапроса. Тот же смысл выражается вложенной лямбдой, которая поддержана.
 
-**Не поддерживается:** `in`, лямбды `any` / `all`, `replace`, `cast`, геопространственные
-функции, `$apply`, `$compute`, `$levels`, `$skiptoken`. Все эти случаи отвергаются явной
-ошибкой, а не выполняются частично.
+**`$search` по умолчанию ищет по всем колонкам корня.** Для публичного API задавайте
+`searchFields`: иначе клиент перебором строки поиска выясняет содержимое полей, которых
+не видит в ответе, и каждый запрос сканирует таблицу целиком.
 
-**Вложенные `$top` / `$skip` внутри `$expand`** работают, но срез применяется после запроса:
-связанные записи приходят из базы целиком. На связях с тысячами записей на родителя это
-заметно — см. [docs/odata-support.md](./docs/odata-support.md#вложенные-top-и-skip).
+**Вложенные `$top` / `$skip` внутри `$expand`** выполняются в SQL: страницу каждой связи
+вырезает оконная функция в условии соединения. На MySQL и на незнакомых драйверах срез
+по-прежнему делается после запроса — почему именно так, написано в
+[docs/odata-support.md](./docs/odata-support.md#вложенные-top-и-skip).
 
 **Белые списки выключены по умолчанию.** Без `allowedFields` / `allowedExpands` клиент
 видит любое поле сущности и любую связь — см. раздел выше.
@@ -547,11 +503,13 @@ GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
 | [docs/recipes.md](./docs/recipes.md) | Готовые примеры под конкретные задачи |
 | [docs/odata-support.md](./docs/odata-support.md) | Матрица поддержки OData |
 | [docs/architecture.md](./docs/architecture.md) | Устройство конвейера |
-| [docs/development.md](./docs/development.md) | Работа над пакетом |
-| [docs/audit.md](./docs/audit.md) | Аудит: дефекты, безопасность, инфраструктура |
-| [docs/roadmap.md](./docs/roadmap.md) | План работ |
 | [CHANGELOG.md](./CHANGELOG.md) | Что менялось между версиями, включая ломающие изменения |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | Как сообщить о дефекте и как прислать изменение |
+
+Эти четыре документа плюс `CHANGELOG.md` входят в npm-пакет. Материалы для тех, кто
+дорабатывает саму библиотеку, живут только в репозитории: [development.md](./docs/development.md)
+(команды, тесты, релиз), [audit.md](./docs/audit.md) (журнал аудита с воспроизведением
+каждого дефекта), [roadmap.md](./docs/roadmap.md) (журнал работ) и
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Для разработчиков пакета
 
@@ -577,7 +535,7 @@ yarn docker:down        # погасить всё
 
 ```bash
 yarn install
-yarn verify                  # lint + формат + документация + тесты + сборка
+yarn verify                  # lint + формат + документация + тесты + сборка + загрузка пакета
 yarn db:up && yarn test:all  # матрица на трёх СУБД, базы из compose
 ```
 
@@ -585,7 +543,7 @@ yarn db:up && yarn test:all  # матрица на трёх СУБД, базы �
 
 | Команда | Что делает |
 |---|---|
-| `yarn verify` | lint + формат + документация + тесты + сборка — то же, что делает CI |
+| `yarn verify` | lint + формат + документация + тесты + сборка + загрузка пакета |
 | `yarn test:unit` | Прогон тестов Jest на SQLite в памяти |
 | `yarn test:all` | Тот же набор тестов на всех трёх СУБД |
 | `yarn test:coverage` | Тесты с измерением покрытия и проверкой порогов |
@@ -593,7 +551,7 @@ yarn db:up && yarn test:all  # матрица на трёх СУБД, базы �
 | `yarn lint` / `yarn lint:fix` | ESLint, с автоисправлением и без |
 | `yarn format` / `yarn format:check` | Prettier, с записью изменений и без |
 | `yarn docs:check` | Ссылки, якоря и примеры кода в документации |
-| `yarn build` | Чистая пересборка в `build/` |
+| `yarn build` | Пересборка обоих форматов: CommonJS и модули ES |
 | `yarn docker:test` | `yarn verify` внутри контейнера |
 | `yarn docker:test:all` | Матрица на трёх СУБД внутри контейнера |
 | `yarn docker:sh` | Оболочка внутри контейнера |

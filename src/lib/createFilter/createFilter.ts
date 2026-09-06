@@ -2,15 +2,12 @@
  * @file Компиляция одного выражения `$filter` (без остальных query options) в тот же формат,
  * что и `createQuery`.
  *
- * Разница с `createQuery` — только в точке входа парсера: здесь используется `filter()`, который ждёт
- * голое булево выражение (`name eq 'Ann'`), а не строку query options (`$filter=name eq 'Ann'`).
- * Всё остальное — тот же `TypeOrmVisitor`, тот же `asType()`, тот же формат результата.
+ * Разница с `createQuery` — только в точке входа парсера: здесь используется `parseFilter`,
+ * который ждёт голое булево выражение (`name eq 'Ann'`), а не строку query options
+ * (`$filter=name eq 'Ann'`). Всё остальное — тот же `TypeOrmVisitor` и тот же формат результата.
  */
-import { filter } from 'odata-v4-parser';
-import type { Token } from 'odata-v4-parser/lib/lexer';
-import { SQLLang } from 'odata-v4-sql';
-
 import { ODataError, ODataParseError } from '../errors';
+import { parseFilter, type Token } from '../odataParser';
 import { TypeOrmVisitor } from '../TypeOrmVisitor';
 import type { SqlOptions } from '../types';
 
@@ -37,16 +34,10 @@ import type { SqlOptions } from '../types';
  * compiled.parameters; // Map { 'p0' => 42 }
  */
 export function createFilter(odataFilter: string | Token, options: SqlOptions): TypeOrmVisitor {
-  options.type = SQLLang.Oracle;
-
   const visitor = new TypeOrmVisitor(options);
-  const ast: Token = <Token>(
-    (typeof odataFilter == 'string' ? parseOrThrow(odataFilter) : odataFilter)
-  );
-  const visit = visitor.Visit(ast);
-  const type = visit.asType();
+  const ast: Token = typeof odataFilter === 'string' ? parseOrThrow(odataFilter) : odataFilter;
 
-  return type;
+  return visitor.Visit(ast);
 }
 
 /**
@@ -55,7 +46,7 @@ export function createFilter(odataFilter: string | Token, options: SqlOptions): 
  */
 function parseOrThrow(odataFilter: string): Token {
   try {
-    return filter(odataFilter) as Token;
+    return parseFilter(odataFilter);
   } catch (e) {
     if (e instanceof ODataError) {
       throw e;

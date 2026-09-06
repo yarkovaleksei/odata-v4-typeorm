@@ -481,14 +481,23 @@ queryBuilder
 ```bash
 # Фильтрация
 GET /api/users?$filter=name eq 'Alice'
+GET /api/users?$filter=name ne 'Alice'
 GET /api/users?$filter=id gt 10 and id lt 100
 GET /api/users?$filter=(name eq 'Alice' or name eq 'Bob') and id gt 1
 GET /api/users?$filter=email eq null
+GET /api/users?$filter=not (name eq 'Alice') and id gt 10   # not относится к первому условию
+GET /api/users?$filter=name in ('Alice','Bob')
 
 # Поиск по подстроке
 GET /api/users?$filter=contains(name,'ali')
 GET /api/users?$filter=startswith(email,'admin')
+GET /api/users?$filter=endswith(email,'.com')
 GET /api/users?$filter=tolower(name) eq 'alice'
+
+# Арифметика и функции
+GET /api/users?$filter=id mul 2 gt 10
+GET /api/users?$filter=length(name) gt 3
+GET /api/users?$filter=year(createdAt) eq 2024
 
 # Выборка полей
 GET /api/users?$select=id,name
@@ -505,13 +514,21 @@ GET /api/users?$top=20&$count=false      # без счётчика, ответ �
 GET /api/users?$expand=posts
 GET /api/users?$expand=posts($select=id,title)
 GET /api/users?$expand=posts($orderby=id desc)
+GET /api/users?$expand=posts($orderby=id desc;$top=3)   # по три последних поста на пользователя
 GET /api/users?$expand=posts($expand=comments)
 
 # Фильтр по полю связи (БЕЗ одновременного $expand той же связи)
 GET /api/users?$filter=posts/title eq 'Hello'
 
-# Полнотекстовый поиск по всем скалярным колонкам
+# Лямбды: условие по коллекции, не размножающее корневые строки
+GET /api/users?$filter=posts/any(p: p/title eq 'Hello')
+GET /api/users?$filter=posts/any()                      # у пользователя вообще есть посты
+GET /api/users?$filter=posts/all(p: p/published eq true)
+
+# Поиск: грамматика OData целиком
 GET /api/users?$search=alice
+GET /api/users?$search=alice OR bob
+GET /api/users?$search="alice smith" NOT admin
 
 # Комбинация
 GET /api/users?$filter=id gt 1&$select=id,name&$orderby=name asc&$top=10&$skip=0

@@ -76,7 +76,7 @@ req.query  { $filter: "name eq 'Ann'", $top: '10', $search: 'x' }
 └──────────┬───────────────────────────────────────────────────┘
            ▼
 ┌──────────────────────┐
-│ applyNestedPagination│  срез вложенных $top / $skip по дереву сущностей
+│ applyNestedPagination│  запасной срез вложенных $top / $skip по дереву сущностей
 └──────────────────────┘
 ```
 
@@ -173,21 +173,38 @@ JOIN всегда LEFT: `$expand` не должен отсеивать сущн�
 Схема детерминированная, поэтому `$expand` и `$filter` по одной и той же связи приходят
 к одному имени и к одному JOIN.
 
-Вложенные `$top` / `$skip` в SQL не попадают: `LIMIT` в запросе с `LEFT JOIN` действует
-на весь плоский результат, а не на группу. Срез делает `applyNestedPagination` уже
-над деревом сущностей.
+Вложенные `$top` / `$skip` обычным `LIMIT` выразить нельзя: в запросе с `LEFT JOIN` он
+действует на весь плоский результат, а не на группу строк одного родителя. Поэтому
+`buildNestedPageCondition` дописывает к `ON` подзапрос с оконной функцией `ROW_NUMBER()`,
+нумерующей связанные строки внутри каждого родителя, и наружу проходит только запрошенная
+страница. Условие идёт именно в `ON`, а не в `FROM`: подзапрос вместо реального соединения
+сломал бы гидрацию — TypeORM собирает сущности по алиасам колонок join'а.
 
-## Отношение к вышестоящим библиотекам
+Там, где перенести срез в SQL нельзя — MySQL считает окно после наложения внешнего условия,
+у незнакомого драйвера оконных функций может не быть, вложенный `$orderby` может ссылаться
+на соседнюю связь, — работает прежний путь: `applyNestedPagination` над деревом сущностей.
+Какие связи уже обработаны в SQL, `processIncludes` складывает в множество `paginated`,
+чтобы срез не применился второй раз.
 
-```
-odata-v4-typeorm-improved
-├── odata-v4-parser   0.1.29   строка OData → AST
-├── odata-v4-sql      0.1.2    базовый Visitor: AST → фрагменты SQL
-└── odata-v4-literal  0.1.1    разбор литералов
-```
+## Зависимости
 
-Все три не поддерживаются с 2016–2018 годов. Практические следствия описаны в
-[audit.md](./audit.md), дефект A-10; стратегия — в [roadmap.md](./roadmap.md), этап 5.
+У библиотеки нет зависимостей времени выполнения. `typeorm` объявлен peer-зависимостью:
+он и так есть в проекте, который эту библиотеку подключает.
+
+Так было не всегда. До версии 2.0.0 разбор держался на трёх пакетах — `odata-v4-parser`,
+`odata-v4-sql` и `odata-v4-literal`, — не обновлявшихся с 2016–2018 годов (дефект A-10).
+Часть дефектов была прямым следствием их устройства: приоритет `not`, перенумерация
+плейсхолдеров, молчаливая потеря тела лямбды. Теперь разбор и обход — свои:
+
+| Модуль | Что заменил |
+|---|---|
+| [odataParser/](../src/lib/odataParser/) | `odata-v4-parser`: строка OData → дерево |
+| [TypeOrmVisitor/](../src/lib/TypeOrmVisitor/) | базовый `Visitor` из `odata-v4-sql` — остаток класса перенесён внутрь |
+| [literal/](../src/lib/literal/) | `odata-v4-literal`: литерал → значение |
+
+Свой парсер покрывает ровно то подмножество OData, которое библиотека транслирует
+в SQL, — примерно четверть от объёма прежнего пакета. Разбор ресурсных путей, JSON-литералов
+и `$apply` в нём отсутствует, потому что отсутствует и трансляция.
 
 ## Карта файлов
 
@@ -195,7 +212,10 @@ odata-v4-typeorm-improved
 |---|---|
 | [src/lib/index.ts](../src/lib/index.ts) | Публичный API пакета |
 | [src/lib/types.ts](../src/lib/types.ts) | `SqlOptions`, `QueryParams`, `ParsedQueryParams` |
-| [src/lib/TypeOrmVisitor/](../src/lib/TypeOrmVisitor/) | Обход AST, ядро компиляции |
+| [src/lib/odataParser/](../src/lib/odataParser/) | Строка OData → дерево разбора |
+| [src/lib/literal/](../src/lib/literal/) | Литерал OData → значение JavaScript и текст SQL |
+| [src/lib/dialect/](../src/lib/dialect/) | Драйвер TypeORM → диалект и его возможности |
+| [src/lib/TypeOrmVisitor/](../src/lib/TypeOrmVisitor/) | Обход дерева, ядро компиляции |
 | [src/lib/createQuery/](../src/lib/createQuery/) | Полная query string → посетитель |
 | [src/lib/createFilter/](../src/lib/createFilter/) | Одно выражение `$filter` → посетитель |
 | [src/lib/executeQuery/executeQuery/](../src/lib/executeQuery/executeQuery/) | Точка входа: Repository \| QueryBuilder |
@@ -203,7 +223,10 @@ odata-v4-typeorm-improved
 | [.../parseQueryParams/](../src/lib/executeQuery/executeQueryByQueryBuilder/parseQueryParams/) | Нормализация типов параметров |
 | [src/lib/executeQuery/queryToOdataString/](../src/lib/executeQuery/queryToOdataString/) | Объект → query string |
 | [src/lib/executeQuery/processIncludes/](../src/lib/executeQuery/processIncludes/) | `includes` → LEFT JOIN |
-| [src/lib/executeQuery/processSearch/](../src/lib/executeQuery/processSearch/) | `$search` → LIKE / равенство |
+| [src/lib/executeQuery/nestedPageCondition/](../src/lib/executeQuery/nestedPageCondition/) | Вложенный `$top` / `$skip` → оконная функция |
+| [src/lib/executeQuery/applyNestedPagination/](../src/lib/executeQuery/applyNestedPagination/) | Тот же срез запасным путём, по дереву сущностей |
+| [src/lib/executeQuery/parseSearch/](../src/lib/executeQuery/parseSearch/) | Грамматика `$search` → дерево |
+| [src/lib/executeQuery/processSearch/](../src/lib/executeQuery/processSearch/) | Дерево `$search` → SQL |
 | [src/lib/executeQuery/mapToObject/](../src/lib/executeQuery/mapToObject/) | `Map` параметров → объект |
 | [src/lib/ODataQueryMiddleware/](../src/lib/ODataQueryMiddleware/) | Обработчик Express |
 | [src/lib/metadata/createMetadataDocument/](../src/lib/metadata/createMetadataDocument/) | `EntityMetadata` → документ `$metadata` в CSDL XML |

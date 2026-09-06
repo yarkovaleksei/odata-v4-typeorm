@@ -8,15 +8,73 @@
  * Почему всегда LEFT, а не INNER: `$expand` в OData не должен отсеивать сущности, у которых
  * связанной записи нет, — иначе `$expand` начал бы работать как скрытый фильтр.
  *
- * ЧТО НЕ ПОДДЕРЖИВАЕТСЯ. Вложенные `$top` / `$skip` внутри `$expand` (`$expand=posts($top=2)`)
- * посетитель разбирает и кладёт в `item.limit` / `item.skip`, но здесь эти поля не читаются —
- * ограничение молча игнорируется, возвращаются все связанные записи. Честная реализация требует
- * оконных функций или отдельного запроса на связь. См. `docs/roadmap.md`, задача R-16.
+ * ВЛОЖЕННАЯ ПАГИНАЦИЯ. `$expand=posts($top=2;$skip=1)` переносится в SQL: к `ON` дописывается
+ * условие с оконной функцией, оставляющее у каждого родителя только запрошенную страницу
+ * (см. `buildNestedPageCondition`). Там, где это невозможно — MySQL, незнакомый драйвер,
+ * вложенный `$orderby` по соседней связи, — условие не строится, и срез делает
+ * `applyNestedPagination` уже над деревом сущностей. Какие связи обработаны в SQL,
+ * `processIncludes` складывает в переданный `paginated`: резать их второй раз в памяти нельзя.
  */
-import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
+import type { DataSource, EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 
 import type { TypeOrmVisitor } from '../../TypeOrmVisitor';
 import { mapToObject } from '../mapToObject';
+import { buildNestedPageCondition } from '../nestedPageCondition';
+
+/**
+ * Настройки переноса вложенной пагинации в SQL.
+ *
+ * @property paginated - сюда складываются include, страницу которых уже вырезал SQL.
+ *   Множество заполняется по ходу обхода и читается затем `applyNestedPagination`.
+ * @property enabled - разрешён ли перенос вообще (опция `nestedPaginationInSql`).
+ */
+export interface NestedPaginationOptions {
+  paginated: Set<TypeOrmVisitor>;
+  enabled: boolean;
+}
+
+/**
+ * Дописывает к условию JOIN условие вложенной пагинации, если её удалось перенести в SQL.
+ *
+ * @returns условие для `ON` и параметры к нему — с уже добавленной страницей либо без неё.
+ */
+function withNestedPage(
+  connection: DataSource,
+  parentMetadata: EntityMetadata,
+  parentAlias: string,
+  item: TypeOrmVisitor,
+  fragments: { where: string; orderby: string },
+  parameters: Record<string, unknown>,
+  nested: NestedPaginationOptions | undefined
+): { condition: string; parameters: Record<string, unknown> } {
+  const plain = { condition: fragments.where, parameters };
+
+  if (!nested?.enabled) {
+    return plain;
+  }
+
+  const relation = parentMetadata.relations.find(
+    (candidate) => candidate.propertyPath === item.navigationProperty
+  );
+
+  if (!relation) {
+    return plain;
+  }
+
+  const page = buildNestedPageCondition(connection, relation, parentAlias, item, fragments);
+
+  if (!page) {
+    return plain;
+  }
+
+  nested.paginated.add(item);
+
+  return {
+    // Условие связи TypeORM допишет само; здесь соединяются только условия из OData.
+    condition: `(${fragments.where}) AND ${page.condition}`,
+    parameters: { ...parameters, ...page.parameters },
+  };
+}
 
 /**
  * Обрабатывает OData-параметр `$expand` (внутреннее представление `includes`),
@@ -27,15 +85,18 @@ import { mapToObject } from '../mapToObject';
  *   При рекурсии сюда передаётся синтетический `{ includes: item.includes }`, а не полный посетитель.
  * @param alias - алиас родительской сущности (`'User'` на верхнем уровне, алиас include — глубже).
  *   Пустая строка означает «путь связи указывать без префикса».
- * @param parent_metadata - метаданные родительской сущности; нужны только для рекурсии,
- *   чтобы по имени связи найти целевую сущность и её метаданные.
+ * @param parent_metadata - метаданные родительской сущности; нужны для рекурсии (по имени связи
+ *   найти целевую сущность) и для переноса вложенной пагинации в SQL.
+ * @param nested - куда записывать связи, страницу которых уже вырезал SQL, и разрешён ли перенос.
+ *   Не передан — вложенные `$top` / `$skip` в SQL не переносятся вовсе.
  * @returns тот же queryBuilder (методы TypeORM возвращают this, но переприсваивание сохранено явно)
  */
 export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
   queryBuilder: SelectQueryBuilder<T>,
   odataQuery: Partial<TypeOrmVisitor>,
   alias: string,
-  parent_metadata: EntityMetadata
+  parent_metadata: EntityMetadata,
+  nested?: NestedPaginationOptions
 ): SelectQueryBuilder<T> => {
   // Нет вложенных связей — возвращаем queryBuilder как есть.
   if (odataQuery.includes && odataQuery.includes.length > 0) {
@@ -64,28 +125,41 @@ export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
         );
       }
 
+      // 'typeorm_query' — плейсхолдер, который базовый Visitor из odata-v4-sql подставляет
+      // как имя таблицы вложенного запроса. Здесь он меняется на реальное имя связи.
+      // Раскрывается один раз: те же фрагменты уходят и в ON, и в подзапрос пагинации.
+      const fragments = {
+        where: item.where.replace(/typeorm_query/g, item.navigationProperty),
+        orderby: (item.orderby ?? '').replace(/typeorm_query/g, item.navigationProperty),
+      };
+
+      const on = withNestedPage(
+        queryBuilder.connection,
+        parent_metadata,
+        alias,
+        item,
+        fragments,
+        mapToObject(item.parameters),
+        nested
+      );
+
       // Аргументы JOIN:
       // 1. путь связи — 'родительскийАлиас.связь' либо просто 'связь', если алиаса нет;
       // 2. алиас присоединяемой таблицы (item.alias, вида 'posts8');
       // 3. дополнительное условие ON. У пустого $filter связи это '1 = 1' — нейтральное условие,
       //    TypeORM добавит его к ON поверх собственного условия связи по внешнему ключу;
-      // 4. параметры условия из Map посетителя.
-      //
-      // 'typeorm_query' — плейсхолдер, который базовый Visitor из odata-v4-sql подставляет
-      // как имя таблицы вложенного запроса. Здесь он меняется на реальное имя связи.
+      // 4. параметры условия: из Map посетителя плюс границы страницы, если она вырезается в SQL.
       queryBuilder = queryBuilder[join](
         (alias ? `${alias}.` : '') + item.navigationProperty,
         item.alias,
-        item.where.replace(/typeorm_query/g, item.navigationProperty),
-        mapToObject(item.parameters)
+        on.condition,
+        on.parameters
       );
 
       // '1' — orderby по умолчанию у базового посетителя, трактуется как «сортировка не задана».
-      if (item.orderby && item.orderby != '1') {
+      if (fragments.orderby && fragments.orderby != '1') {
         // Строка вида 'posts8.name ASC, posts8.created DESC'.
-        const orders: string[] = item.orderby
-          .split(',')
-          .map((i: string) => i.trim().replace(/typeorm_query/g, item.navigationProperty));
+        const orders: string[] = fragments.orderby.split(',').map((i: string) => i.trim());
 
         orders.forEach((orderItem) => {
           const [field, order] = orderItem.split(' ');
@@ -113,7 +187,13 @@ export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
         if (target) {
           const relation_metadata = queryBuilder.connection.getMetadata(target.type);
           // На следующем уровне родительским алиасом становится алиас текущего include.
-          processIncludes(queryBuilder, { includes: item.includes }, item.alias, relation_metadata);
+          processIncludes(
+            queryBuilder,
+            { includes: item.includes },
+            item.alias,
+            relation_metadata,
+            nested
+          );
         }
       }
     });

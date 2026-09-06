@@ -1,8 +1,14 @@
 /**
- * @file Специализация посетителя `odata-v4-sql` для совместимости с TypeORM QueryBuilder.
+ * @file Обход дерева OData с накоплением фрагментов SQL для TypeORM QueryBuilder.
  *
- * Базовый класс `Visitor` при обходе AST OData накапливает строковые фрагменты SQL (`where`, `select`,
- * `orderby`), лимиты/смещения и `Map` параметров. Этот класс дополняет поведение:
+ * Класс накапливает строковые фрагменты SQL (`where`, `select`, `orderby`), лимиты и смещения,
+ * карту параметров и дерево `includes` для `$expand`. Раньше он наследовался от `Visitor`
+ * из `odata-v4-sql` (последний релиз — 2016 год) и переопределял почти всё, что там было;
+ * вместе с уходом от неподдерживаемых зависимостей (R-18) остаток базового класса перенесён
+ * сюда. Заодно исчезла машинерия, которая обслуживала только чужой код: диалекты `SQLLang`,
+ * перенумерация плейсхолдеров `asType()` и обходы узлов, которых наш парсер не порождает.
+ *
+ * Что делает этот обход:
  * - порядок обхода query options (`$expand` → `$filter` → `$select`) для согласованных алиасов;
  * - вложенные `$expand` как отдельные экземпляры `TypeOrmVisitor` в массиве `includes`;
  * - пути вида `связь/поле` в фильтрах и сортировке: автоматическое создание «виртуального» expand
@@ -11,70 +17,25 @@
  * - логическое отрицание `not`, арифметика (`add`, `sub`, `mul`, `div`, `mod`), унарный минус;
  * - строковые, числовые и календарные функции OData в `WHERE`.
  *
- * Диалект SQL жёстко выравнивается на Oracle-стиль в конструкторе и в фабричных функциях
- * `createQuery` / `createFilter`. Выбор именно Oracle не связан с СУБД пользователя: он сделан
- * потому, что `Visitor.asOracleSql()` переписывает позиционные плейсхолдеры `?` в именованные
- * `:pN`, а именно именованные параметры понимает TypeORM QueryBuilder.
+ * ПЛЕЙСХОЛДЕРЫ именованные (`:p0`), потому что их понимает TypeORM QueryBuilder. Позиционных
+ * `?` здесь нет вовсе — прежний базовый класс писал их, а потом отдельным проходом
+ * перенумеровывал, и на этом проходе рождался дефект A-01: имена, расставленные заранее,
+ * он не видел и назначал те же номера повторно.
  *
- * ЖИЗНЕННЫЙ ЦИКЛ. Результат обхода корректен только после вызова `asType()` — его делают
- * `createQuery` / `createFilter`. Если конструировать посетитель вручную, вызывать обязательно.
- *
- * ПРИНЦИП: молча ничего не терять. Узел AST, для которого нет обработчика, приводит к
- * {@link ODataUnsupportedError}, а не к пропуску части запроса. Раньше базовый класс печатал
+ * ПРИНЦИП: молча ничего не терять. Узел дерева, для которого нет обработчика, приводит к
+ * {@link ODataUnsupportedError}, а не к пропуску части запроса. Прежний базовый класс печатал
  * такие узлы в `console.log` и продолжал обход, из-за чего `$filter=not (…)` возвращал всю
  * таблицу вместо подмножества.
  */
-import { Literal } from 'odata-v4-literal';
-import { type Token, TokenType } from 'odata-v4-parser/lib/lexer';
-import { SQLLiteral, SQLLang, Visitor } from 'odata-v4-sql/lib/visitor';
 
+import { normalizeDialect } from '../dialect';
 import { ODataUnsupportedError } from '../errors';
-import type { SqlDialect, SqlOptions } from '../types';
-
-/**
- * Приведение значения `type` из настроек TypeORM к одному из поддерживаемых диалектов.
- *
- * TypeORM различает больше драйверов, чем существует диалектных различий: `mariadb` ведёт себя
- * как `mysql`, `better-sqlite3` — как `sqlite`, облачные варианты Postgres — как обычный Postgres.
- * Незнакомый драйвер сводится к `'ansi'`: там подставляются наиболее переносимые конструкции.
- */
-function normalizeDialect(driver?: string): SqlDialect {
-  switch (driver) {
-    case 'postgres':
-    case 'aurora-postgres':
-    case 'cockroachdb':
-      return 'postgres';
-    case 'mysql':
-    case 'mariadb':
-    case 'aurora-mysql':
-      return 'mysql';
-    case 'sqlite':
-    case 'better-sqlite3':
-    case 'capacitor':
-    case 'cordova':
-    case 'expo':
-    case 'nativescript':
-    case 'sqljs':
-      return 'sqlite';
-    case 'mssql':
-      return 'mssql';
-    case 'oracle':
-      return 'oracle';
-    default:
-      return 'ansi';
-  }
-}
+import { convertLiteral, literalToSql } from '../literal';
+import { type Token, TokenType } from '../odataParser';
+import type { RelationSource, SqlDialect, SqlOptions } from '../types';
 
 /** Строковые поля посетителя, в которые ветки обхода дописывают SQL. */
 type TargetField = 'where' | 'select' | 'orderby';
-
-/**
- * Признак лямбда-оператора OData (`posts/any(p: …)`, `posts/all(p: …)`) в тексте пути.
- *
- * Проверка текстовая, потому что структурно поймать такой узел невозможно: парсер этой версии
- * тело лямбды теряет и отдаёт обычный путь свойства.
- */
-const LAMBDA_OPERATOR = /\/(any|all)\s*\(/i;
 
 /**
  * Контекст обхода AST, который передаётся сверху вниз по рекурсии `Visit`.
@@ -121,14 +82,52 @@ function argumentAt(params: readonly Token[], index: number, method: string): To
   return param;
 }
 
-export class TypeOrmVisitor extends Visitor {
+export class TypeOrmVisitor {
+  /** Список выбираемых колонок; `'*'` означает «`$select` не задан». */
+  public select = '';
+
+  /** Условие `WHERE`; `'1 = 1'` означает «`$filter` не задан». */
+  public where = '';
+
+  /** Выражение `ORDER BY`; `'1'` означает «`$orderby` не задан». */
+  public orderby = '';
+
+  /** Значение `$skip`; `undefined` — опция не задана. */
+  public skip?: number;
+
+  /** Значение `$top`; `undefined` — опция не задана. */
+  public limit?: number;
+
+  /** Значение `$count`. */
+  public inlinecount = false;
+
+  /** Имя связи для дочернего посетителя; у корня пустое. */
+  public navigationProperty = '';
+
+  /** Значения параметров запроса: `p0`, `p1`, … в порядке появления в SQL. */
+  public parameters = new Map<string, unknown>();
+
+  /**
+   * Сквозной счётчик имён параметров.
+   *
+   * Общий на всё дерево: дочерние посетители забирают его перед обходом и возвращают после,
+   * иначе `:p0` из вложенного `$filter` столкнулся бы с `:p0` корневого.
+   */
+  public parameterSeed = 0;
+
+  /** Настройки генерации SQL, переданные в конструктор. */
+  protected readonly options: SqlOptions;
+
+  /** Корневой узел обхода: по нему определяется момент, когда пора проставить умолчания. */
+  private ast?: Token;
+
   /**
    * Дочерние посетители — по одному на каждую связь, попавшую в запрос.
    * Создаются в {@link TypeOrmVisitor.VisitExpand} (для `$expand`) и в
    * {@link TypeOrmVisitor.resolveNavigationChain} (для путей `связь/поле` в фильтрах и сортировке).
    * Дальше дерево разворачивается в цепочку `leftJoin` в `processIncludes`.
    */
-  public override includes: TypeOrmVisitor[] = [];
+  public includes: TypeOrmVisitor[] = [];
 
   /**
    * SQL-алиас таблицы для этой ветки AST.
@@ -172,13 +171,40 @@ export class TypeOrmVisitor extends Visitor {
   /** Целевая СУБД: определяет, какие SQL-функции подставлять для функций OData. */
   private readonly dialect: SqlDialect;
 
-  constructor(options: SqlOptions) {
-    super(options);
+  /**
+   * Имя переменной лямбды, если этот посетитель компилирует её тело (`books/any(b: …)` → `b`).
+   *
+   * Внутри тела путь, начинающийся с переменной, относится к связанной сущности, а любое
+   * другое имя — к внешнему уровню: так требует спецификация (раздел 5.1.1.13), и так же
+   * читается человеком.
+   */
+  private lambdaVariable = '';
 
-    // SQLLang фиксируем здесь, а не берём из options: от него зависит формат плейсхолдеров,
-    // который приводит в порядок asType() (см. заголовок файла). К выбору SQL-функций
-    // он отношения не имеет — за это отвечает отдельное поле dialect.
-    this.type = SQLLang.Oracle;
+  /** Алиас внешнего уровня — к нему относятся имена, не начинающиеся с переменной лямбды. */
+  private outerAlias = '';
+
+  /**
+   * Как записать колонку связанной сущности внутри тела лямбды.
+   *
+   * Своими силами посетитель этого не может: во внешнем запросе имя свойства в имя колонки
+   * превращает TypeORM, но алиас подзапроса ему неизвестен. Функцию отдаёт резолвер связей —
+   * у него есть метаданные.
+   */
+  private lambdaColumn?: (property: string) => string;
+
+  /**
+   * Пути связей, пройденные лямбда-операторами.
+   *
+   * Отдельно от `includes`, потому что лямбда не создаёт JOIN — она разворачивается в `EXISTS`.
+   * Но для белого списка `allowedExpands` разницы нет: связь в запросе задействована,
+   * и проверка обязана её увидеть.
+   */
+  private readonly lambdaRelations: string[] = [];
+
+  constructor(options: SqlOptions) {
+    // Параметры вместо инлайна литералов — умолчание: инлайн допустим только там,
+    // где SQL собирают руками, и включается явно.
+    this.options = { ...options, useParameters: options.useParameters !== false };
     this.alias = options.alias || this.alias;
     this.dialect = normalizeDialect(options.dialect);
   }
@@ -193,21 +219,32 @@ export class TypeOrmVisitor extends Visitor {
    *
    * @throws {ODataUnsupportedError} для узла, который библиотека не умеет транслировать.
    */
-  override Visit(node: Token, context?: Context): this {
+  public Visit(node: Token, context: Context = { target: 'where' }): this {
+    this.ast = this.ast ?? node;
+
     if (node) {
       const handlerName = `Visit${node.type}` as keyof this;
+      const handler = this[handlerName];
 
-      if (typeof this[handlerName] !== 'function') {
+      if (typeof handler !== 'function') {
         throw new ODataUnsupportedError(node.type, node.raw);
       }
+
+      (handler as (node: Token, context: Context) => void).call(this, node, context);
     }
 
-    return super.Visit(node, context);
+    // Умолчания проставляются на выходе из корневого узла: вызывающий код читает их
+    // как признак «опция не задана».
+    if (node === this.ast) {
+      this.applyDefaults();
+    }
+
+    return this;
   }
 
   /**
-   * Собирает полный SQL SELECT (наследие базового API посетителя): список полей, WHERE, ORDER BY,
-   * и при необходимости Oracle-стиль пагинации OFFSET/FETCH.
+   * Собирает полный SQL SELECT: список полей, WHERE, ORDER BY и, при необходимости,
+   * пагинацию в форме `OFFSET … ROWS FETCH NEXT … ROWS ONLY`.
    *
    * В сценарии с TypeORM этот метод не используется — QueryBuilder собирает SQL сам из
    * `select` / `where` / `parameters`. `from()` нужен для «сырого» сценария (`createFilter` +
@@ -216,7 +253,7 @@ export class TypeOrmVisitor extends Visitor {
    * @param table - имя таблицы; подставляется в SQL как есть, без экранирования, поэтому
    *   передавать сюда пользовательский ввод нельзя.
    */
-  override from(table: string) {
+  public from(table: string) {
     let sql = `SELECT ${this.select} FROM ${table} WHERE ${this.where} ORDER BY ${this.orderby}`;
 
     if (typeof this.skip == 'number') {
@@ -278,13 +315,14 @@ export class TypeOrmVisitor extends Visitor {
   /**
    * Имена всех связей, задействованных запросом, на всех уровнях вложенности.
    *
-   * Включает и связи из `$expand`, и «виртуальные» — созданные путями `связь/поле`
-   * в фильтрах и сортировке.
+   * Включает связи из `$expand`, «виртуальные» — созданные путями `связь/поле` в фильтрах
+   * и сортировке, — и пройденные лямбда-операторами: JOIN они не создают, но связь
+   * задействуют, и белый список обязан это видеть.
    *
    * @returns имена связей без путей: для `$expand=books($expand=reviews)` — `['books', 'reviews']`.
    */
   public collectNavigationProperties(): string[] {
-    const result: string[] = [];
+    const result: string[] = [...this.lambdaRelations];
 
     for (const include of this.includes) {
       if (!result.includes(include.navigationProperty)) {
@@ -361,13 +399,108 @@ export class TypeOrmVisitor extends Visitor {
    * Обработка узла с несколькими query options: сначала сортируем дочерние токены в нужном порядке,
    * затем рекурсивно делегируем в `Visit`.
    */
-  protected override VisitQueryOptions(node: Token, context: Context) {
+  protected VisitQueryOptions(node: Token, context: Context) {
     node.value.options
       .sort(
         (a: Token, b: Token) =>
           this.queryOptionsSort.indexOf(a.type) - this.queryOptionsSort.indexOf(b.type)
       )
       .forEach((option: Token) => this.Visit(option, context));
+  }
+
+  /** `$filter`: всё выражение пишется в `where`. */
+  protected VisitFilter(node: Token, context: Context) {
+    context.target = 'where';
+
+    this.Visit(node.value, context);
+  }
+
+  /**
+   * `$select`: список полей.
+   *
+   * Разделитель между элементами добавляет сам {@link TypeOrmVisitor.VisitSelectItem} —
+   * раньше это делали оба места сразу, и в списке появлялись двойные запятые (задача R-29).
+   */
+  protected VisitSelect(node: Token, context: Context) {
+    context.target = 'select';
+
+    node.value.items.forEach((item: Token) => this.Visit(item, context));
+  }
+
+  /** `$orderby`: список выражений с направлением. */
+  protected VisitOrderBy(node: Token, context: Context) {
+    context.target = 'orderby';
+
+    node.value.items.forEach((item: Token, index: number) => {
+      if (index > 0) {
+        this.orderby += ', ';
+      }
+
+      this.Visit(item, context);
+    });
+  }
+
+  /** Один элемент `$orderby`: выражение и направление. */
+  protected VisitOrderByItem(node: Token, context: Context) {
+    this.Visit(node.value.expr, context);
+
+    this.orderby += node.value.direction > 0 ? ' ASC' : ' DESC';
+  }
+
+  /** `$top`. Значение проверяет вызывающий код: отрицательное — ошибка клиента, а не парсера. */
+  protected VisitTop(node: Token) {
+    this.limit = Number(node.value.raw);
+  }
+
+  /** `$skip`. */
+  protected VisitSkip(node: Token) {
+    this.skip = Number(node.value.raw);
+  }
+
+  /** `$count`. Форму ответа по нему выбирает `executeQuery`, а не посетитель. */
+  protected VisitInlineCount(node: Token) {
+    this.inlinecount = convertLiteral(node.value.value, node.value.raw) === true;
+  }
+
+  /** Один элемент `$expand`: имя связи и вложенные опции. */
+  protected VisitExpandItem(node: Token, context: Context) {
+    this.Visit(node.value.path, context);
+
+    if (node.value.options) {
+      node.value.options.forEach((option: Token) => this.Visit(option, context));
+    }
+  }
+
+  /** Имя связи внутри `$expand`. */
+  protected VisitExpandPath(node: Token) {
+    this.navigationProperty = node.raw;
+  }
+
+  /** Логическое `and`. */
+  protected VisitAndExpression(node: Token, context: Context) {
+    this.Visit(node.value.left, context);
+    this.append(context, ' AND ');
+    this.Visit(node.value.right, context);
+  }
+
+  /** Логическое `or`. */
+  protected VisitOrExpression(node: Token, context: Context) {
+    this.Visit(node.value.left, context);
+    this.append(context, ' OR ');
+    this.Visit(node.value.right, context);
+  }
+
+  /**
+   * Скобочная группа логического выражения.
+   *
+   * Отличается от {@link TypeOrmVisitor.VisitParenExpression} только тем, что группирует:
+   * там арифметика, здесь логика. Обе пишут скобки — группировку, заданную запросом,
+   * нельзя терять по дороге в SQL.
+   */
+  protected VisitBoolParenExpression(node: Token, context: Context) {
+    this.append(context, '(');
+    this.Visit(node.value, context);
+    this.append(context, ')');
   }
 
   /**
@@ -382,7 +515,7 @@ export class TypeOrmVisitor extends Visitor {
    * `parameterSeed` передаётся в дочерний посетитель и забирается обратно, чтобы сквозная
    * нумерация `:p0, :p1, …` не пересекалась между корнем и вложенными ветками.
    */
-  protected override VisitExpand(node: Token) {
+  protected VisitExpand(node: Token) {
     node.value.items.forEach((item: Token) => {
       const navigationProperty = item.value.path.raw;
 
@@ -441,7 +574,7 @@ export class TypeOrmVisitor extends Visitor {
    * если include не найден, связь всё равно резолвится (создаётся виртуальный JOIN), поэтому
    * `$select=books/title` работает и без явного `$expand`.
    */
-  protected override VisitSelectItem(node: Token, context: Context) {
+  protected VisitSelectItem(node: Token, context: Context) {
     if (this.select !== '' && !this.select.trim().endsWith(',')) {
       this.select += ', ';
     }
@@ -478,13 +611,11 @@ export class TypeOrmVisitor extends Visitor {
    * Для каждого сегмента-связи гарантируется наличие include-посетителя; последний сегмент —
    * имя колонки, оно префиксуется алиасом самой глубокой связи.
    */
-  protected override VisitPropertyPathExpression(node: Token, context: Context) {
-    // Лямбда-операторы отлавливаются здесь, а не в Visit: `odata-v4-parser` 0.1.29 не создаёт
-    // для них отдельного узла — он молча отбрасывает тело лямбды и оставляет обычный путь
-    // свойства, у которого в `raw` ещё виден исходный текст. Без этой проверки
-    // `$filter=posts/any(p: p/title eq 'x')` скомпилировался бы в бессмысленное `u.posts`.
-    if (LAMBDA_OPERATOR.test(node.raw)) {
-      throw new ODataUnsupportedError('lambda operators (any/all)', node.raw);
+  protected VisitPropertyPathExpression(node: Token, context: Context) {
+    if (this.lambdaVariable) {
+      this.visitInsideLambda(node, context);
+
+      return;
     }
 
     if (node.value.current && node.value.next) {
@@ -501,6 +632,40 @@ export class TypeOrmVisitor extends Visitor {
     }
 
     this.Visit(node.value, context);
+  }
+
+  /**
+   * Путь свойства внутри тела лямбды.
+   *
+   * Путь, начинающийся с переменной (`b/pages`), относится к связанной сущности; любой
+   * другой — к внешнему уровню (`books/any(b: b/pages gt pages)` сравнивает страницы книги
+   * со страницами внешней сущности).
+   *
+   * @throws {ODataUnsupportedError} для пути через связь внутри тела (`b/author/name`):
+   *   он потребовал бы ещё одного соединения внутри подзапроса. Тот же смысл выражается
+   *   вложенной лямбдой, которая поддержана.
+   */
+  private visitInsideLambda(node: Token, context: Context) {
+    const segments = node.raw.split('/');
+
+    if (segments[0] !== this.lambdaVariable) {
+      // Имя внешнего уровня: и трекинг, и префикс относятся к нему.
+      this.trackField(node.raw);
+      this.append(context, this.outerAlias ? `${this.outerAlias}.${node.raw}` : node.raw);
+      context.identifier = node.raw;
+
+      return;
+    }
+
+    if (segments.length !== 2) {
+      throw new ODataUnsupportedError('property path through a relation inside a lambda', node.raw);
+    }
+
+    const field = segments[1] as string;
+
+    this.trackField(field);
+    this.append(context, this.lambdaColumn ? this.lambdaColumn(field) : this.qualify(field));
+    context.identifier = field;
   }
 
   /**
@@ -562,7 +727,7 @@ export class TypeOrmVisitor extends Visitor {
    * Пути `связь/поле` сюда не доходят — их целиком разбирает
    * {@link TypeOrmVisitor.VisitPropertyPathExpression}.
    */
-  protected override VisitODataIdentifier(node: Token, context: Context) {
+  protected VisitODataIdentifier(node: Token, context: Context) {
     this.trackField(node.value.name);
 
     this.append(context, this.qualify(node.value.name));
@@ -655,32 +820,32 @@ export class TypeOrmVisitor extends Visitor {
   // ───────────────────────────────────────────────────────────────────────────
 
   /** Равенство `eq`; сравнение с `null` превращается в `IS NULL`. */
-  protected override VisitEqualsExpression(node: Token, context: Context) {
+  protected VisitEqualsExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '=', 'IS NULL', true);
   }
 
   /** Неравенство `ne`; сравнение с `null` превращается в `IS NOT NULL`. */
-  protected override VisitNotEqualsExpression(node: Token, context: Context) {
+  protected VisitNotEqualsExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '<>', 'IS NOT NULL', false);
   }
 
   /** Строго меньше `lt`. */
-  protected override VisitLesserThanExpression(node: Token, context: Context) {
+  protected VisitLesserThanExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '<');
   }
 
   /** Меньше либо равно `le`. */
-  protected override VisitLesserOrEqualsExpression(node: Token, context: Context) {
+  protected VisitLesserOrEqualsExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '<=');
   }
 
   /** Строго больше `gt`. */
-  protected override VisitGreaterThanExpression(node: Token, context: Context) {
+  protected VisitGreaterThanExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '>');
   }
 
   /** Больше либо равно `ge`. */
-  protected override VisitGreaterOrEqualsExpression(node: Token, context: Context) {
+  protected VisitGreaterOrEqualsExpression(node: Token, context: Context) {
     this.visitComparison(node, context, '>=');
   }
 
@@ -752,6 +917,162 @@ export class TypeOrmVisitor extends Visitor {
   }
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Множества и коллекции
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Оператор `in`: `age in (30, 40, 50)`.
+   *
+   * Значения раскладываются по параметрам, как и любые другие литералы, — список
+   * из запроса в текст SQL не попадает.
+   */
+  protected VisitInExpression(node: Token, context: Context) {
+    const values: Token[] = node.value.values ?? [];
+
+    // Пустой список не совпадает ни с чем, а `IN ()` — синтаксическая ошибка почти везде.
+    if (values.length === 0) {
+      this.append(context, '1 = 0');
+
+      return;
+    }
+
+    this.Visit(node.value.left, context);
+    this.append(context, ' IN (');
+
+    values.forEach((value, index) => {
+      if (index > 0) {
+        this.append(context, ', ');
+      }
+
+      this.Visit(value, context);
+    });
+
+    this.append(context, ')');
+  }
+
+  /**
+   * Лямбда-операторы `any` и `all`.
+   *
+   * Оба разворачиваются в коррелированный подзапрос, а не в соединение: `JOIN` с коллекцией
+   * размножил бы корневые строки, и `$top` начал бы возвращать не то число записей.
+   *
+   * ```sql
+   * -- books/any(b: b/pages gt 100)
+   * EXISTS (SELECT 1 FROM "book" "Author_books_b"
+   *          WHERE "Author_books_b"."author_id" = "Author"."id" AND ("Author_books_b"."pages" > :p0))
+   *
+   * -- books/all(b: b/pages gt 100)
+   * NOT EXISTS (SELECT 1 FROM "book" "Author_books_b"
+   *              WHERE "Author_books_b"."author_id" = "Author"."id" AND NOT ("Author_books_b"."pages" > :p0))
+   * ```
+   *
+   * `all` через отрицание `any` даёт и правильный ответ на пустой коллекции: «все элементы
+   * удовлетворяют условию» истинно, когда элементов нет вовсе.
+   *
+   * ПРО NULL. Если условие для строки не определено (сравнение с `NULL`), такая строка
+   * не попадает ни в `EXISTS`, ни в `NOT EXISTS` — то есть для `all` считается подходящей.
+   * Это поведение трёхзначной логики SQL, и переопределять его библиотека не берётся:
+   * запрос, написанный руками, повёл бы себя так же.
+   *
+   * @throws {ODataUnsupportedError} если вызывающий код не передал способ разрешить связь.
+   *   Так бывает при прямом вызове `createFilter` без метаданных: имя таблицы взять неоткуда.
+   */
+  protected VisitLambdaExpression(node: Token, context: Context) {
+    // Внутри тела лямбды путь начинается с её переменной: `b/reviews/any(…)` считает связи
+    // от книги, а не от автора, и первый сегмент к пути связей не относится.
+    const navigation: string[] = this.lambdaVariable
+      ? (node.value.navigation as string[]).slice(1)
+      : node.value.navigation;
+    const operator: 'any' | 'all' = node.value.operator;
+    const variable: string = node.value.variable;
+    const predicate: Token | undefined = node.value.predicate;
+
+    const resolve = this.options.resolveRelation;
+
+    if (!resolve) {
+      throw new ODataUnsupportedError('lambda operators (any/all)', node.raw);
+    }
+
+    // Алиас уникален внутри своего подзапроса, а подзапросы друг друга не видят —
+    // поэтому достаточно имени переменной и пути связи.
+    const childAlias = [this.alias, ...navigation, variable].filter(Boolean).join('_');
+    const source = resolve(navigation, this.alias, childAlias);
+
+    if (!source) {
+      throw new ODataUnsupportedError('lambda over an unknown navigation property', node.raw);
+    }
+
+    for (const name of navigation) {
+      if (!this.lambdaRelations.includes(name)) {
+        this.lambdaRelations.push(name);
+      }
+    }
+
+    const conditions = [source.where];
+
+    if (predicate) {
+      const body = this.compileLambdaBody(predicate, childAlias, variable, source, navigation);
+
+      conditions.push(operator === 'all' ? `NOT (${body})` : `(${body})`);
+    }
+
+    const exists = operator === 'all' ? 'NOT EXISTS' : 'EXISTS';
+
+    this.append(
+      context,
+      `${exists} (SELECT 1 FROM ${source.from} WHERE ${conditions.join(' AND ')})`
+    );
+  }
+
+  /**
+   * Компилирует тело лямбды отдельным посетителем.
+   *
+   * Отдельный посетитель нужен, потому что внутри тела другой алиас и другая сущность.
+   * Счётчик параметров при этом общий: `:p0` из тела и `:p0` снаружи столкнулись бы в одном
+   * запросе. Упомянутые в теле поля возвращаются наверх с префиксом пути — иначе белый список
+   * `allowedFields` не увидел бы обращения внутри лямбды.
+   */
+  private compileLambdaBody(
+    predicate: Token,
+    childAlias: string,
+    variable: string,
+    source: RelationSource,
+    navigation: readonly string[]
+  ): string {
+    const inner = new TypeOrmVisitor({
+      ...this.options,
+      alias: childAlias,
+      // Вложенные лямбды считают связи уже от целевой сущности.
+      resolveRelation: source.resolveRelation,
+    });
+
+    inner.lambdaVariable = variable;
+    inner.outerAlias = this.alias;
+    inner.lambdaColumn = source.column;
+    inner.parameterSeed = this.parameterSeed;
+
+    inner.Visit(predicate, { target: 'where' });
+
+    this.parameterSeed = inner.parameterSeed;
+
+    for (const [name, value] of inner.parameters) {
+      this.parameters.set(name, value);
+    }
+
+    for (const field of inner.referencedFields) {
+      this.trackField([...navigation, field].join('/'));
+    }
+
+    for (const name of inner.lambdaRelations) {
+      if (!this.lambdaRelations.includes(name)) {
+        this.lambdaRelations.push(name);
+      }
+    }
+
+    return inner.where;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Литералы
   // ───────────────────────────────────────────────────────────────────────────
 
@@ -766,7 +1087,7 @@ export class TypeOrmVisitor extends Visitor {
    * в `IS NULL` в {@link TypeOrmVisitor.visitComparison}. Номер плейсхолдера при этом
    * расходуется — безобидно, нумерация остаётся сквозной и согласованной с картой параметров.
    */
-  protected override VisitLiteral(node: Token, context: Context) {
+  protected VisitLiteral(node: Token, context: Context) {
     // Парсер отдаёт для `null` узел Literal со значением-типом 'null'.
     this.lastLiteralWasNull = node.value === 'null';
 
@@ -785,7 +1106,7 @@ export class TypeOrmVisitor extends Visitor {
       return;
     }
 
-    context.literal = SQLLiteral.convert(node.value, node.raw);
+    context.literal = literalToSql(node.value, node.raw);
 
     this.append(context, String(context.literal));
   }
@@ -805,7 +1126,7 @@ export class TypeOrmVisitor extends Visitor {
       return node.raw;
     }
 
-    return Literal.convert(node.value, node.raw);
+    return convertLiteral(node.value, node.raw);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -827,7 +1148,7 @@ export class TypeOrmVisitor extends Visitor {
    *
    * @throws {ODataUnsupportedError} для функции, у которой нет трансляции в SQL.
    */
-  protected override VisitMethodCallExpression(node: Token, context: Context) {
+  protected VisitMethodCallExpression(node: Token, context: Context) {
     const method = node.value.method as string;
     const params: Token[] = node.value.parameters || [];
 
@@ -1099,9 +1420,9 @@ export class TypeOrmVisitor extends Visitor {
     this.Visit(column, context);
 
     if (!this.options.useParameters) {
-      // Режим без параметров: литерал инлайнится. SQLLiteral.convert возвращает строку
+      // Режим без параметров: литерал инлайнится. literalToSql возвращает строку
       // в одинарных кавычках — снимаем их, чтобы вставить шаблон с % внутрь кавычек.
-      const raw = String(SQLLiteral.convert(pattern.value, pattern.raw)).slice(1, -1);
+      const raw = String(literalToSql(pattern.value, pattern.raw)).slice(1, -1);
 
       this.append(context, ` LIKE '${buildPattern(raw)}'`);
 
@@ -1109,7 +1430,7 @@ export class TypeOrmVisitor extends Visitor {
     }
 
     const name = `p${this.parameterSeed++}`;
-    const value = Literal.convert(pattern.value, pattern.raw);
+    const value = convertLiteral(pattern.value, pattern.raw);
 
     this.parameters.set(name, buildPattern(String(value)));
 

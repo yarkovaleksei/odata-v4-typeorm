@@ -12,6 +12,8 @@ import {
   createQuery,
   createFilter,
   TypeOrmVisitor,
+  parseQueryOptions,
+  parseFilter,
   ODataUnsupportedError,
   parseQueryParams,
   queryToOdataString,
@@ -46,6 +48,10 @@ function executeQuery<T extends ObjectLiteral = ObjectLiteral>(
 | `options.maxTop` | Верхняя граница `$top`; запрос с бо́льшим значением усекается |
 | `options.allowedFields` | Белый список полей для `$select` / `$filter` / `$orderby`. Полные пути от корня |
 | `options.allowedExpands` | Белый список связей для `$expand` и путей в фильтрах |
+| `options.searchFields` | Поля для `$search`; пути от корня, можно через связи (`'author/name'`) |
+| `options.searchMode` | `'like'` (по умолчанию) или `'fulltext'` — полнотекстовый поиск СУБД |
+| `options.searchLanguage` | Язык словоформ PostgreSQL для `'fulltext'`. По умолчанию `'simple'` |
+| `options.nestedPaginationInSql` | Выполнять ли вложенные `$top` / `$skip` в SQL. По умолчанию `true` |
 
 **Возвращает** массив сущностей; `{ items, count }` — только при явном `$count=true`
 (отсутствующий `$count` по OData v4, раздел 11.2.5.5, означает `false`).
@@ -302,8 +308,9 @@ queryBuilder
   .setParameters(mapToObject(compiled.parameters));
 ```
 
-> Функция мутирует переданный объект `options` (проставляет `type`). Передавайте литерал,
-> а не переиспользуемую переменную.
+Лямбда-операторы (`books/any(b: …)`) при прямом вызове не работают: компилятор знает только
+имена свойств, а для подзапроса нужны имя таблицы и колонки внешнего ключа. Передайте
+`resolveRelation` — либо пользуйтесь `executeQuery`, который подставляет её сам.
 
 ---
 
@@ -336,7 +343,7 @@ connection.query(`SELECT * FROM users WHERE ${compiled.where}`, compiled.paramet
 трансляцию отдельных узлов.
 
 ```ts
-class TypeOrmVisitor extends Visitor {
+class TypeOrmVisitor {
   includes: TypeOrmVisitor[];   // дочерние посетители $expand
   alias: string;                // SQL-алиас этой ветки
   select: string;               // '*' если $select не задан
@@ -350,11 +357,9 @@ class TypeOrmVisitor extends Visitor {
 }
 ```
 
-При ручном использовании обязателен `asType()` — он приводит плейсхолдеры к формату TypeORM:
-
 ```ts
-const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true });
-const compiled = visitor.Visit(query("$filter=name eq 'Ann'")).asType();
+const visitor = new TypeOrmVisitor({ alias: 'u' });
+const compiled = visitor.Visit(parseQueryOptions("$filter=name eq 'Ann'"));
 ```
 
 > `from(table)` подставляет имя таблицы в SQL без экранирования. Пользовательский ввод туда
@@ -393,6 +398,27 @@ type ParsedQueryParams = Pick<QueryParams, '$search' | '$filter' | '$orderby' | 
 };
 ```
 
+### `SqlOptions`
+
+Опции компиляции для `createQuery` и `createFilter`.
+
+```ts
+interface SqlOptions {
+  alias: string;                     // SQL-префикс колонок; '' — без префикса
+  useParameters?: boolean;           // значения в параметры, а не в текст SQL; по умолчанию true
+  dialect?: SqlDialect | string;     // 'postgres' | 'mysql' | … либо type из настроек TypeORM
+  resolveRelation?: RelationResolver; // как развернуть связь в подзапрос — нужно лямбдам
+}
+```
+
+`useParameters: false` инлайнит литералы в текст SQL. Нужен только там, где запрос собирают
+и исполняют вручную и параметры некуда передать; это же и единственная поверхность, через
+которую в SQL попадает пользовательский ввод, — отсюда обратное умолчание.
+
+`resolveRelation` заполняет слой выполнения: `executeQuery` строит её из метаданных TypeORM.
+Без неё лямбда-операторы `any` / `all` отвергаются `ODataUnsupportedError` — имя таблицы
+компилятору взять неоткуда.
+
 ### `ExecuteQueryOptions`
 
 ```ts
@@ -401,6 +427,10 @@ interface ExecuteQueryOptions {
   maxTop?: number;                       // потолок $top; больше — усекается
   allowedFields?: readonly string[];     // белый список полей, полные пути от корня
   allowedExpands?: readonly string[];    // белый список связей, имена без путей
+  searchFields?: readonly string[];      // поля для $search, можно пути через связи
+  searchMode?: 'like' | 'fulltext';      // как сравнивать текст, по умолчанию 'like'
+  searchLanguage?: string;               // язык словоформ PostgreSQL, по умолчанию 'simple'
+  nestedPaginationInSql?: boolean;       // вложенный $top / $skip средствами SQL, по умолчанию true
 }
 ```
 
@@ -410,6 +440,27 @@ interface ExecuteQueryOptions {
 
 `allowedExpands` проверяется на каждом уровне вложенности: для
 `$expand=posts($expand=comments)` в списке должны быть и `posts`, и `comments`.
+
+`searchFields` перечисляет поля, по которым работает `$search`. Без него поиск идёт по всем
+скалярным колонкам корня — удобно, но на публичном API опасно и медленно: перебором строки
+поиска клиент выясняет содержимое полей, которые ему не показывают, и каждый запрос сканирует
+таблицу целиком. Путь может идти через связи (`'author/name'`, `'books/reviews/text'`) —
+такое поле компилируется в `EXISTS`, поэтому число корневых строк не меняется.
+
+`searchMode: 'fulltext'` переключает сравнение с подстроки (`LIKE`) на полнотекстовый поиск
+СУБД: `to_tsvector @@ plainto_tsquery` в PostgreSQL, `MATCH … AGAINST` в MySQL. В MySQL колонка
+обязана входить в индекс `FULLTEXT`; на SQLite и MS SQL режим молча остаётся `'like'`.
+Язык словоформ PostgreSQL задаётся `searchLanguage` и должен совпадать с языком в индексе.
+Подробности — в [odata-support.md](./odata-support.md#как-сравнивать).
+
+`nestedPaginationInSql` управляет тем, как выполняется вложенная пагинация
+`$expand=posts($top=2)`. По умолчанию страницу каждой связи вырезает оконная функция
+в условии соединения, и из базы поднимается только она. При `false` связанные строки
+приходят целиком, а срез делается над деревом сущностей — результат тот же, запрос проще.
+Выключать имеет смысл на СУБД без оконных функций, которую библиотека не распознала
+(MySQL 5.7, MariaDB 10.1 — обе сняты с поддержки), либо при неудачном плане запроса.
+На MySQL и на незнакомом драйвере срез и так делается в памяти — там опция ничего
+не меняет; подробности в [odata-support.md](./odata-support.md#вложенные-top-и-skip).
 
 ## Ошибки
 

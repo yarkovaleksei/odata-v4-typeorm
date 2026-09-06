@@ -702,6 +702,31 @@
             "description": ""
           },
           "response": []
+        },
+        {
+          "name": "Оператор in",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=name in ('Ada','Grace')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "name in ('Ada','Grace')"
+                }
+              ]
+            },
+            "description": "Список значений транслируется в SQL-оператор IN; значения уходят в параметры."
+          },
+          "response": []
         }
       ]
     },
@@ -998,6 +1023,186 @@
       ]
     },
     {
+      "name": "$filter — лямбда-операторы",
+      "item": [
+        {
+          "name": "any с условием",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/any(b: b/pages gt 400)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/any(b: b/pages gt 400)"
+                }
+              ]
+            },
+            "description": "Есть хотя бы одна книга длиннее 400 страниц. Разворачивается в EXISTS, поэтому автор возвращается один раз, сколько бы книг ни подошло."
+          },
+          "response": []
+        },
+        {
+          "name": "any без условия",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/any()",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/any()"
+                }
+              ]
+            },
+            "description": "У автора вообще есть книги."
+          },
+          "response": []
+        },
+        {
+          "name": "all",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/all(b: b/pages gt 200)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/all(b: b/pages gt 200)"
+                }
+              ]
+            },
+            "description": "Все книги длиннее 200 страниц. Автор без книг проходит: «все элементы пустой коллекции удовлетворяют условию» истинно."
+          },
+          "response": []
+        },
+        {
+          "name": "Путь до коллекции через две связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/reviews/any(r: r/score eq 5)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/reviews/any(r: r/score eq 5)"
+                }
+              ]
+            },
+            "description": "Есть книга с рецензией на пятёрку."
+          },
+          "response": []
+        },
+        {
+          "name": "Вложенная лямбда",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/any(b: b/reviews/any(r: r/score eq 5))",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/any(b: b/reviews/any(r: r/score eq 5))"
+                }
+              ]
+            },
+            "description": "То же самое вложенными лямбдами: внутренняя считает связи от книги."
+          },
+          "response": []
+        },
+        {
+          "name": "Лямбда по связи «многие ко многим»",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=tags/any(t: t/label eq 'classic')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "tags/any(t: t/label eq 'classic')"
+                }
+              ]
+            },
+            "description": "Подзапрос проходит через таблицу связей."
+          },
+          "response": []
+        },
+        {
+          "name": "Путь через связь внутри тела — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/any(b: b/author/name eq 'Ada')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/any(b: b/author/name eq 'Ada')"
+                }
+              ]
+            },
+            "description": "Не поддержано: потребовало бы ещё одного соединения внутри подзапроса. Тот же смысл выражается вложенной лямбдой."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "Сортировка и пагинация",
       "item": [
         {
@@ -1220,6 +1425,106 @@
             "description": "По текстовым колонкам идёт LIKE, по числовым — точное равенство."
           },
           "response": []
+        },
+        {
+          "name": "Несколько слов — неявный AND",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=pioneer computing",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "pioneer computing"
+                }
+              ]
+            },
+            "description": "Пробел между словами означает AND: найдётся строка, где есть оба."
+          },
+          "response": []
+        },
+        {
+          "name": "Оператор OR",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=ada OR alan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "ada OR alan"
+                }
+              ]
+            },
+            "description": "Любое из слов."
+          },
+          "response": []
+        },
+        {
+          "name": "Фраза целиком",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=\"pioneer of computing\"",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "\"pioneer of computing\""
+                }
+              ]
+            },
+            "description": "Кавычки ищут фразу вместе с пробелами."
+          },
+          "response": []
+        },
+        {
+          "name": "Отрицание",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=NOT ada",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "NOT ada"
+                }
+              ]
+            },
+            "description": "Строки, где слова нет. Записи с пустыми колонками остаются в выдаче."
+          },
+          "response": []
         }
       ]
     },
@@ -1252,12 +1557,12 @@
           "response": []
         },
         {
-          "name": "Лямбда any — 400",
+          "name": "Функция без трансляции — 400",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/authors?$filter=books/any(b: b/id eq 1)",
+              "raw": "{{base_url}}/api/authors?$filter=fractionalseconds(registeredAt) eq 1",
               "host": [
                 "{{base_url}}"
               ],
@@ -1268,36 +1573,11 @@
               "query": [
                 {
                   "key": "$filter",
-                  "value": "books/any(b: b/id eq 1)"
+                  "value": "fractionalseconds(registeredAt) eq 1"
                 }
               ]
             },
-            "description": ""
-          },
-          "response": []
-        },
-        {
-          "name": "Оператор in — 400",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/books?$filter=id in (1,2)",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "api",
-                "books"
-              ],
-              "query": [
-                {
-                  "key": "$filter",
-                  "value": "id in (1,2)"
-                }
-              ]
-            },
-            "description": ""
+            "description": "Функция разобрана, но SQL для неё нет: запрос отвергается, а не выполняется частично."
           },
           "response": []
         },

@@ -59,14 +59,23 @@ jobs:
       - name: Run build library
         run: yarn build
 
+      # Двойная публикация (CommonJS + модули ES) ломается тихо: карта exports может указывать
+      # на несуществующий файл, а в модулях ES — не хватить расширения в импорте. Тесты идут
+      # через ts-jest и настоящий пакет не грузят, поэтому он загружается здесь, обоими способами.
+      - name: Check package loads in both formats
+        run: yarn build:check
+
       # Демо-сервер годами оставался сломанным именно потому, что его никто не собирал.
       # Проверка типов дешёвая и не даёт ему разойтись с библиотекой снова.
       - name: Typecheck example server
         run: yarn server:typecheck
 
-      # Раньше exclude в tsconfig.build.json использовал шаблон `*.(test|spec).ts`,
-      # который TypeScript не понимает (групп с альтернативой в его glob нет),
-      # и скомпилированные тесты молча уезжали в npm-пакет. Проверка сторожит регрессию.
+      # Состав пакета задан белым списком `files`, и шаг сторожит две регрессии.
+      # Первая: exclude в tsconfig.build.json когда-то использовал шаблон `*.(test|spec).ts`,
+      # который TypeScript не понимает (групп с альтернативой в его glob нет), и
+      # скомпилированные тесты молча уезжали в npm-пакет. Вторая: вернуть в `files`
+      # каталог `docs` целиком проще всего по невнимательности, а вместе с ним уедут
+      # и документы для сопровождающего.
       - name: Check package contents
         run: |
           FILES=$(npm pack --dry-run --json | node -e "
@@ -74,20 +83,33 @@ jobs:
             process.stdin.on('data', (c) => (d += c));
             process.stdin.on('end', () => {
               const pkg = JSON.parse(d)[0];
-              const bad = pkg.files
-                .map((f) => f.path)
-                .filter((p) => /\.(test|spec)\./.test(p) || p.startsWith('build/src/test/'));
-              console.log(JSON.stringify({ total: pkg.entryCount, bad }));
+              const paths = pkg.files.map((f) => f.path);
+              // Документы, адресованные сопровождающему: журнал аудита, журнал работ
+              // и инструкции по прогонам. Потребителю пакета они не нужны — это 135 КБ
+              // текста про версию, которую он никогда не установит.
+              const maintainerDocs = /^docs\/(audit|roadmap|development)\.md$/;
+              const bad = paths.filter(
+                (p) => /\.(test|spec)\./.test(p) || p.includes('/src/test/') || maintainerDocs.test(p)
+              );
+              // Обе сборки обязаны быть в пакете: без одной из них карта exports указывает
+              // в пустоту для половины потребителей.
+              const cjs = paths.filter((p) => p.startsWith('build/src/lib/')).length;
+              const esm = paths.filter((p) => p.startsWith('build/esm/src/lib/')).length;
+              console.log(JSON.stringify({ total: pkg.entryCount, bad, cjs, esm }));
             });
           ")
           echo "$FILES"
           node -e "
-            const { total, bad } = JSON.parse(process.argv[1]);
+            const { total, bad, cjs, esm } = JSON.parse(process.argv[1]);
             if (bad.length) {
-              console.error('Тестовые файлы попали в пакет:\n' + bad.join('\n'));
+              console.error('В пакет попало лишнее:\n' + bad.join('\n'));
               process.exit(1);
             }
-            console.log('Пакет чист: ' + total + ' файлов, тестов нет');
+            if (!cjs || !esm) {
+              console.error('В пакете нет одной из сборок: cjs=' + cjs + ', esm=' + esm);
+              process.exit(1);
+            }
+            console.log('Пакет чист: ' + total + ' файлов, тестов нет; сборки CJS и ES на месте');
           " "$FILES"
   # Матрица совместимости с OData на реальных СУБД.
   #

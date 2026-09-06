@@ -159,7 +159,7 @@ describe('executeQueryByQueryBuilder', () => {
 
     const [, params]: WhereResult = (mockQueryBuilder.andWhere as jest.Mock).mock.calls[1];
 
-    expect(params).toEqual({ textSearchValue: '%test%' });
+    expect(params).toEqual({ searchText0: '%test%' });
   });
 
   it('должен применить пагинацию $skip и $top', async () => {

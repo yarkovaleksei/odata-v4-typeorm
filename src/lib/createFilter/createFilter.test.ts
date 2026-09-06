@@ -5,10 +5,10 @@
  * файла было 31% строк. При этом именно она — точка входа для сценария «сырой SQL мимо
  * TypeORM», где ошибка не всплывёт ни в каком другом тесте.
  *
- * Ключевое отличие от `createQuery` — точка входа парсера: `filter()` ждёт голое булево
+ * Ключевое отличие от `createQuery` — точка входа парсера: `parseFilter()` ждёт голое булево
  * выражение (`name eq 'Ann'`), а не строку query options (`$filter=name eq 'Ann'`).
  */
-import { filter } from 'odata-v4-parser';
+import { parseFilter } from '../odataParser';
 
 import { ODataParseError, ODataUnsupportedError } from '../errors';
 import { createFilter } from './createFilter';
@@ -117,7 +117,7 @@ describe('createFilter', () => {
 
   describe('готовый AST на входе', () => {
     it('принимает Token и не разбирает строку повторно', () => {
-      const ast = filter("name eq 'Ann'");
+      const ast = parseFilter("name eq 'Ann'");
       const compiled = createFilter(ast, { alias: 'u' });
 
       expect(compiled.where).toBe('u.name = :p0');

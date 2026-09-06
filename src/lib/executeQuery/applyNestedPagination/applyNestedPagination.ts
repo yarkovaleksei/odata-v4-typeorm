@@ -1,23 +1,24 @@
 /**
- * @file Пагинация внутри `$expand`: `$expand=books($top=2;$skip=1)`.
+ * @file Запасной путь вложенной пагинации `$expand=books($top=2;$skip=1)`: срез над деревом
+ * загруженных сущностей.
  *
- * ПОЧЕМУ ПОСЛЕ ЗАПРОСА, А НЕ В SQL
+ * ОСНОВНОЙ ПУТЬ — В SQL. Страницу вырезает условие с оконной функцией, дописанное к `ON`
+ * соединения связи (см. `buildNestedPageCondition`): из базы поднимается только запрошенная
+ * страница. Модуль здесь работает там, где так сделать нельзя:
  *
- * Связи загружаются одним запросом через `LEFT JOIN`, поэтому ограничить число связанных
- * строк на каждого родителя средствами того же запроса нельзя: `LIMIT` в нём действует
- * на весь плоский результат, а не на группу. Правильное решение на стороне СУБД —
- * оконная функция `ROW_NUMBER() OVER (PARTITION BY <внешний ключ> ORDER BY …)` в подзапросе
- * либо `LATERAL`-соединение; и то и другое требует отдельного запроса на связь и заметно
- * усложняет гидрацию сущностей в TypeORM.
+ * - у драйвера нет оконных функций (незнакомая СУБД) либо перенос отключён опцией
+ *   `nestedPaginationInSql: false`;
+ * - вложенный `$filter` или `$orderby` ссылается на соседнюю связь, алиаса которой
+ *   в подзапросе не существует.
  *
- * Здесь выбран более простой путь: связанные записи приходят целиком, а срез делается уже
- * над готовым деревом сущностей. Результат при этом верный — сортировка вложенного
- * `$orderby` применена в SQL, то есть порядок к моменту среза уже правильный.
+ * Результат в обоих случаях одинаковый: вложенный `$orderby` отрабатывает в SQL, поэтому
+ * к моменту среза порядок внутри каждого родителя уже правильный.
  *
- * ЧЕМ ЗА ЭТО ПЛАТИМ: из базы поднимаются все связанные строки, а не только нужная страница.
- * Для связи с десятками записей на родителя это незаметно; для связи с тысячами —
- * ощутимо, и там вложенный `$top` лучше не использовать. Перенос среза в SQL —
- * см. `docs/roadmap.md`, задача R-16.
+ * ЧЕМ ПЛАТИМ ЗДЕСЬ: из базы поднимаются все связанные строки, а не только нужная страница.
+ * Для связи с десятками записей на родителя это незаметно; для связи с тысячами — ощутимо.
+ *
+ * Связи, страницу которых уже вырезал SQL, передаются в `paginated` и пропускаются: повторный
+ * срез применил бы `$skip` второй раз, к уже урезанной коллекции, и вернул бы пустоту.
  */
 import type { ObjectLiteral } from 'typeorm';
 
@@ -31,6 +32,8 @@ import type { TypeOrmVisitor } from '../../TypeOrmVisitor';
  *
  * @param entities - корневые сущности из `getMany()`.
  * @param includes - дерево include-посетителей (`odataQuery.includes`).
+ * @param paginated - связи, страницу которых уже вырезал SQL; их срез пропускается,
+ *   но обход уходит вглубь — ограничение может стоять на связи следующего уровня.
  * @returns те же сущности, для удобства сцепления вызовов.
  *
  * @example
@@ -39,9 +42,10 @@ import type { TypeOrmVisitor } from '../../TypeOrmVisitor';
  */
 export function applyNestedPagination<T extends ObjectLiteral>(
   entities: T[],
-  includes: readonly TypeOrmVisitor[]
+  includes: readonly TypeOrmVisitor[],
+  paginated: ReadonlySet<TypeOrmVisitor> = new Set()
 ): T[] {
-  trimLevel(entities, includes);
+  trimLevel(entities, includes, paginated);
 
   return entities;
 }
@@ -52,7 +56,11 @@ export function applyNestedPagination<T extends ObjectLiteral>(
  * Рекурсия идёт по дереву include, а не по сущностям: связей всегда на порядки меньше,
  * чем строк, поэтому цикл по связям снаружи, а по сущностям — внутри.
  */
-function trimLevel(entities: readonly ObjectLiteral[], includes: readonly TypeOrmVisitor[]): void {
+function trimLevel(
+  entities: readonly ObjectLiteral[],
+  includes: readonly TypeOrmVisitor[],
+  paginated: ReadonlySet<TypeOrmVisitor>
+): void {
   if (!includes.length) {
     return;
   }
@@ -64,7 +72,7 @@ function trimLevel(entities: readonly ObjectLiteral[], includes: readonly TypeOr
     }
 
     for (const include of includes) {
-      trimRelation(entity, include);
+      trimRelation(entity, include, paginated);
     }
   }
 }
@@ -76,21 +84,25 @@ function trimLevel(entities: readonly ObjectLiteral[], includes: readonly TypeOr
  * не режется никогда — `$top` для неё бессмыслен, — но в неё всё равно нужно спуститься:
  * ограничение может стоять на связи следующего уровня.
  */
-function trimRelation(entity: ObjectLiteral, include: TypeOrmVisitor): void {
+function trimRelation(
+  entity: ObjectLiteral,
+  include: TypeOrmVisitor,
+  paginated: ReadonlySet<TypeOrmVisitor>
+): void {
   const value = entity[include.navigationProperty];
 
   if (Array.isArray(value)) {
-    const trimmed = sliceRelation(value, include);
+    const trimmed = paginated.has(include) ? value : sliceRelation(value, include);
 
     entity[include.navigationProperty] = trimmed;
 
-    trimLevel(trimmed, include.includes);
+    trimLevel(trimmed, include.includes, paginated);
 
     return;
   }
 
   if (value && typeof value === 'object') {
-    trimLevel([value as ObjectLiteral], include.includes);
+    trimLevel([value as ObjectLiteral], include.includes, paginated);
   }
 }
 
@@ -112,8 +124,8 @@ function sliceRelation(items: readonly ObjectLiteral[], include: TypeOrmVisitor)
     return items as ObjectLiteral[];
   }
 
-  const start = hasSkip ? include.skip : 0;
-  const end = hasLimit ? start + include.limit : undefined;
+  const start = hasSkip ? (include.skip as number) : 0;
+  const end = hasLimit ? start + (include.limit as number) : undefined;
 
   return items.slice(start, end);
 }

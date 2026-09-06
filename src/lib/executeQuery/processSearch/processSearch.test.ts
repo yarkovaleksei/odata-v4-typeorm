@@ -1,13 +1,19 @@
-import type {
-  EntityMetadata,
-  ObjectLiteral,
-  SelectQueryBuilder,
-  WhereExpressionBuilder,
-} from 'typeorm';
+/**
+ * @file Компиляция `$search` в SQL.
+ *
+ * Структуру выражения проверяет `parseSearch.test`; здесь — во что она превращается:
+ * какие колонки участвуют, как выглядит условие терма и как собираются параметры.
+ *
+ * Набор колонок задаётся моком метаданных: перебирать типы колонок на живой базе значило бы
+ * заводить сущность на каждый случай. Поиск по полям связей проверяется отдельно, на настоящих
+ * метаданных — там мок описывал бы представление автора о TypeORM, а не TypeORM.
+ */
+import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 import { Brackets } from 'typeorm';
-import { processSearch } from './processSearch';
 
-type WhereResult = [Brackets, Record<string, string>];
+import { ODataInvalidQueryError } from '../../errors';
+import { dataSource } from '../../../test/setup/dataSource';
+import { processSearch, type ProcessSearchOptions } from './processSearch';
 
 /**
  * Мок QueryBuilder.
@@ -16,12 +22,13 @@ type WhereResult = [Brackets, Record<string, string>];
  * а не жёстко зашитые кавычки — иначе `$search` не работал бы на MySQL. Здесь берётся
  * ANSI-форма с двойными кавычками, как в PostgreSQL и SQLite.
  */
-const createMockQueryBuilder = () => {
+const createMockQueryBuilder = (dialect = 'sqlite') => {
   const mock = {
     andWhere: jest.fn().mockReturnThis(),
-    orWhere: jest.fn().mockReturnThis(),
     connection: {
       driver: { escape: (identifier: string) => `"${identifier}"` },
+      // Диалект нужен режиму 'fulltext'; для 'like' достаточно, чтобы поле существовало.
+      options: { type: dialect },
     },
   };
 
@@ -41,190 +48,337 @@ const createMockMetadata = (
   return {
     columns: columns.map((col) => ({
       propertyName: col.propertyName,
+      propertyPath: col.propertyName,
       databaseName: col.databaseName ?? col.propertyName,
       type: col.type,
       relationMetadata: undefined,
     })),
-  } as EntityMetadata;
+    relations: [],
+  } as unknown as EntityMetadata;
 };
 
+/** Условие и параметры, с которыми `processSearch` дёрнул `andWhere`. */
+function compiled(queryBuilder: SelectQueryBuilder<ObjectLiteral>): {
+  condition: string;
+  parameters: Record<string, string | number>;
+} {
+  const calls = (queryBuilder.andWhere as jest.Mock).mock.calls;
+
+  expect(calls).toHaveLength(1);
+
+  const [brackets, parameters] = calls[0] as [Brackets, Record<string, string | number>];
+  let condition = '';
+
+  brackets.whereFactory({
+    where: (value: string) => {
+      condition = value;
+
+      return undefined as never;
+    },
+  } as never);
+
+  return { condition, parameters };
+}
+
+/** Выполняет поиск на моке и возвращает результат компиляции. */
+function run(
+  metadata: EntityMetadata,
+  search: string,
+  options?: ProcessSearchOptions
+): { condition: string; parameters: Record<string, string | number> } {
+  const queryBuilder = createMockQueryBuilder();
+
+  processSearch(queryBuilder, metadata, search, 'entity', options);
+
+  return compiled(queryBuilder);
+}
+
+const textAndNumber = createMockMetadata([
+  { propertyName: 'title', type: 'varchar' },
+  { propertyName: 'age', type: 'integer' },
+]);
+
 describe('processSearch', () => {
-  let queryBuilder: SelectQueryBuilder<ObjectLiteral>;
-  const alias = 'entity';
+  describe('один терм', () => {
+    it('текстовая колонка сравнивается по подстроке, числовая пропускается', () => {
+      const { condition, parameters } = run(textAndNumber, 'hello');
 
-  beforeEach(() => {
-    queryBuilder = createMockQueryBuilder();
-    jest.clearAllMocks();
+      // Внешние скобки — от терма: он объединяет совпадения по всем колонкам через OR.
+      expect(condition).toBe(
+        `(("entity"."title" IS NOT NULL AND LOWER("entity"."title") LIKE :searchText0 ESCAPE '!'))`
+      );
+      expect(parameters).toEqual({ searchText0: '%hello%' });
+    });
+
+    it('числовое значение ищется и по числовым колонкам — на точное равенство', () => {
+      const { condition, parameters } = run(textAndNumber, '42');
+
+      expect(condition).toContain(`LOWER("entity"."title") LIKE :searchText0`);
+      expect(condition).toContain(
+        `("entity"."age" IS NOT NULL AND "entity"."age" = :searchNumber0)`
+      );
+      expect(parameters).toEqual({ searchText0: '%42%', searchNumber0: 42 });
+    });
+
+    it('нечисловое значение по числовым колонкам не ищется', () => {
+      const { condition, parameters } = run(textAndNumber, '123abc');
+
+      expect(condition).not.toContain('searchNumber');
+      expect(parameters).toEqual({ searchText0: '%123abc%' });
+    });
+
+    /**
+     * Проверка на NULL не украшение: без неё `LIKE` по пустой колонке даёт `NULL`,
+     * и `NOT` над таким условием выбросил бы строки, которые обязан оставить.
+     */
+    it('каждое сравнение защищено проверкой на NULL', () => {
+      const { condition } = run(textAndNumber, 'x');
+
+      expect(condition).toContain('"entity"."title" IS NOT NULL AND');
+    });
+
+    it('спецсимволы шаблона экранируются', () => {
+      const { parameters } = run(textAndNumber, '50%_!');
+
+      expect(parameters.searchText0).toBe('%50!%!_!!%');
+    });
+
+    it('имя колонки берётся из databaseName, а не из имени свойства', () => {
+      // Дефект A-05: при snake_case в SQL уходило имя свойства, и запрос падал.
+      const metadata = createMockMetadata([
+        { propertyName: 'firstName', databaseName: 'first_name', type: 'varchar' },
+      ]);
+
+      expect(run(metadata, 'ann').condition).toContain('"entity"."first_name"');
+    });
   });
 
-  test('должен добавить текстовый поиск, если $search – строка', () => {
-    const metadata = createMockMetadata([
-      { propertyName: 'title', type: 'varchar' },
-      { propertyName: 'age', type: 'integer' },
-    ]);
-    const $search = 'hello';
+  describe('операторы', () => {
+    it('соседние слова соединяются через AND, у каждого свой параметр', () => {
+      const { condition, parameters } = run(textAndNumber, 'ada lovelace');
 
-    processSearch(queryBuilder, metadata, $search, alias);
+      expect(condition).toContain(' AND ');
+      expect(parameters).toEqual({ searchText0: '%ada%', searchText1: '%lovelace%' });
+    });
 
-    expect(queryBuilder.andWhere).toHaveBeenCalledTimes(1);
+    it('OR', () => {
+      const { condition } = run(textAndNumber, 'ada OR grace');
 
-    const [brackets, params]: WhereResult = (queryBuilder.andWhere as jest.Mock).mock.calls[0];
+      expect(condition).toContain(' OR ');
+      expect(condition).toContain(':searchText0');
+      expect(condition).toContain(':searchText1');
+    });
 
-    expect(brackets).toBeInstanceOf(Brackets);
-    expect(params).toEqual({ textSearchValue: '%hello%' });
+    it('NOT', () => {
+      const { condition } = run(textAndNumber, 'NOT ada');
 
-    // Проверяем внутренние условия
-    const innerQb = {
-      where: jest.fn().mockReturnThis(),
-      orWhere: jest.fn().mockReturnThis(),
-    } as Partial<WhereExpressionBuilder>;
+      expect(condition.startsWith('NOT ')).toBe(true);
+    });
 
-    brackets.whereFactory(innerQb as WhereExpressionBuilder);
+    it('фраза ищется целиком, вместе с пробелами', () => {
+      const { parameters } = run(textAndNumber, '"ada lovelace"');
 
-    expect(innerQb.where).toHaveBeenCalledWith(
-      'LOWER("entity"."title") LIKE LOWER(:textSearchValue)'
-    );
-    expect(innerQb.orWhere).not.toHaveBeenCalled(); // только одна текстовая колонка
+      expect(parameters).toEqual({ searchText0: '%ada lovelace%' });
+    });
+
+    it('скобки сохраняют приоритет', () => {
+      const { condition } = run(textAndNumber, '(ada OR grace) hopper');
+
+      // Внешнее соединение — AND, внутри левой части — OR.
+      expect(condition).toMatch(/^\(\([\s\S]* OR [\s\S]*\) AND [\s\S]*\)$/);
+    });
   });
 
-  test('должен добавить числовой поиск, если $search – число', () => {
-    const metadata = createMockMetadata([
-      { propertyName: 'title', type: 'varchar' },
-      { propertyName: 'age', type: 'integer' },
-    ]);
-    const $search = '42';
+  describe('когда искать нечего', () => {
+    it('пустая строка не добавляет условий', () => {
+      const queryBuilder = createMockQueryBuilder();
 
-    processSearch(queryBuilder, metadata, $search, alias);
+      processSearch(queryBuilder, textAndNumber, '', 'entity');
+      processSearch(queryBuilder, textAndNumber, '   ', 'entity');
 
-    const [brackets, params]: WhereResult = (queryBuilder.andWhere as jest.Mock).mock.calls[0];
+      expect(queryBuilder.andWhere).not.toHaveBeenCalled();
+    });
 
-    expect(params).toEqual({ textSearchValue: '%42%', numberSearchValue: 42 });
+    it('null и undefined не добавляют условий', () => {
+      const queryBuilder = createMockQueryBuilder();
 
-    const innerQb = {
-      where: jest.fn().mockReturnThis(),
-      orWhere: jest.fn().mockReturnThis(),
-    } as Partial<WhereExpressionBuilder>;
+      processSearch(queryBuilder, textAndNumber, null as unknown as string, 'entity');
+      processSearch(queryBuilder, textAndNumber, undefined as unknown as string, 'entity');
 
-    brackets.whereFactory(innerQb as WhereExpressionBuilder);
+      expect(queryBuilder.andWhere).not.toHaveBeenCalled();
+    });
 
-    // Текстовое условие (первое) -> where, числовое -> orWhere
-    expect(innerQb.where).toHaveBeenCalledWith(
-      'LOWER("entity"."title") LIKE LOWER(:textSearchValue)'
-    );
-    expect(innerQb.orWhere).toHaveBeenCalledWith('"entity"."age" = :numberSearchValue');
+    it('у сущности нет пригодных колонок — поиск игнорируется', () => {
+      const queryBuilder = createMockQueryBuilder();
+      const metadata = createMockMetadata([{ propertyName: 'createdAt', type: 'timestamp' }]);
+
+      processSearch(queryBuilder, metadata, 'ada', 'entity');
+
+      expect(queryBuilder.andWhere).not.toHaveBeenCalled();
+    });
+
+    it('слово несравнимо ни с одной колонкой — терм не совпадает ни с чем', () => {
+      const metadata = createMockMetadata([{ propertyName: 'age', type: 'integer' }]);
+
+      expect(run(metadata, 'abc').condition).toBe('1 = 0');
+    });
   });
 
-  test('должен добавить только текстовый поиск, если $search – не число', () => {
-    const metadata = createMockMetadata([
-      { propertyName: 'age', type: 'integer' },
-      { propertyName: 'score', type: 'float' },
-      { propertyName: 'text', type: 'varchar' },
-    ]);
-    const $search = 'abc';
+  describe('searchFields', () => {
+    it('ограничивает набор колонок корня', () => {
+      const metadata = createMockMetadata([
+        { propertyName: 'title', type: 'varchar' },
+        { propertyName: 'secret', type: 'varchar' },
+      ]);
 
-    processSearch(queryBuilder, metadata, $search, alias);
+      const { condition } = run(metadata, 'ada', { fields: ['title'] });
 
-    const [brackets, params]: WhereResult = (queryBuilder.andWhere as jest.Mock).mock.calls[0];
+      expect(condition).toContain('"entity"."title"');
+      expect(condition).not.toContain('secret');
+    });
 
-    expect(params).toEqual({ textSearchValue: '%abc%' });
-    expect(params).not.toHaveProperty('numberSearchValue');
+    it('поле связи компилируется в EXISTS, а не в JOIN', () => {
+      // На настоящих метаданных: условие связи целиком строится из них.
+      const queryBuilder = createMockQueryBuilder();
 
-    const innerQb = {
-      where: jest.fn().mockReturnThis(),
-      orWhere: jest.fn().mockReturnThis(),
-    } as Partial<WhereExpressionBuilder>;
+      processSearch(queryBuilder, dataSource.getMetadata('Book'), 'ada', 'Book', {
+        fields: ['author/name'],
+      });
 
-    brackets.whereFactory(innerQb as WhereExpressionBuilder);
+      const { condition } = compiled(queryBuilder);
 
-    expect(innerQb.where).toHaveBeenCalledWith(
-      'LOWER("entity"."text") LIKE LOWER(:textSearchValue)'
-    );
+      expect(condition).toContain('EXISTS (SELECT 1 FROM "author" "Book__s0"');
+      expect(condition).toContain('"Book__s0"."id" = "Book"."author_id"');
+      expect(condition).toContain('LOWER("Book__s0"."name") LIKE :searchText0');
+    });
+
+    it('поле связи «один ко многим» тоже даёт EXISTS — число строк не меняется', () => {
+      const queryBuilder = createMockQueryBuilder();
+
+      processSearch(queryBuilder, dataSource.getMetadata('Author'), 'engine', 'Author', {
+        fields: ['books/title'],
+      });
+
+      const { condition } = compiled(queryBuilder);
+
+      expect(condition).toContain('EXISTS (SELECT 1 FROM "book" "Author__s0"');
+      expect(condition).toContain('"Author__s0"."author_id" = "Author"."id"');
+    });
+
+    it('поле связи «многие ко многим» проходит через таблицу связей', () => {
+      const queryBuilder = createMockQueryBuilder();
+
+      processSearch(queryBuilder, dataSource.getMetadata('Book'), 'classic', 'Book', {
+        fields: ['tags/label'],
+      });
+
+      const { condition } = compiled(queryBuilder);
+
+      expect(condition).toContain('"book_tag" "Book__s0__jt"');
+      expect(condition).toContain('"Book__s0__jt"."book_id" = "Book"."id"');
+      expect(condition).toContain('"Book__s0__jt"."tag_id" = "Book__s0"."id"');
+    });
+
+    /**
+     * Путь через две связи даёт один `EXISTS` с двумя таблицами, а не два вложенных:
+     * соединение остаётся соединением независимо от того, записано оно вложенностью
+     * или списком, а читается линейный вариант проще.
+     */
+    it('путь через две связи даёт один EXISTS с двумя таблицами', () => {
+      const queryBuilder = createMockQueryBuilder();
+
+      processSearch(queryBuilder, dataSource.getMetadata('Author'), 'brilliant', 'Author', {
+        fields: ['books/reviews/text'],
+      });
+
+      const { condition } = compiled(queryBuilder);
+
+      expect(condition.match(/EXISTS/g)).toHaveLength(1);
+      expect(condition).toContain('"book" "Author__s0__n0", "review" "Author__s0"');
+      expect(condition).toContain('"Author__s0"."book_id" = "Author__s0__n0"."id"');
+    });
+
+    it.each([
+      ['несуществующее поле', ['nope']],
+      ['несуществующая связь', ['nope/name']],
+      ['поле, по которому искать нельзя', ['registeredAt']],
+    ])('%s отвергается ошибкой', (_name, fields) => {
+      expect(() =>
+        processSearch(createMockQueryBuilder(), dataSource.getMetadata('Author'), 'x', 'Author', {
+          fields,
+        })
+      ).toThrow(ODataInvalidQueryError);
+    });
   });
 
-  test('не должен добавлять числовой поиск, если текстовые колонки есть, но $search – не число', () => {
-    const metadata = createMockMetadata([
-      { propertyName: 'name', type: 'varchar' },
-      { propertyName: 'age', type: 'integer' },
-    ]);
-    const $search = 'abc123';
+  describe('режим fulltext', () => {
+    /** Тот же прогон, но на моке заданного диалекта. */
+    function runOn(dialect: string, search: string, options?: ProcessSearchOptions) {
+      const queryBuilder = createMockQueryBuilder(dialect);
 
-    processSearch(queryBuilder, metadata, $search, alias);
+      processSearch(queryBuilder, textAndNumber, search, 'entity', {
+        mode: 'fulltext',
+        ...options,
+      });
 
-    const [, params]: WhereResult = (queryBuilder.andWhere as jest.Mock).mock.calls[0];
+      return compiled(queryBuilder);
+    }
 
-    expect(params).toEqual({ textSearchValue: '%abc123%' });
-    expect(params).not.toHaveProperty('numberSearchValue');
+    it('PostgreSQL: слово ищется через plainto_tsquery', () => {
+      const { condition, parameters } = runOn('postgres', 'ada');
+
+      expect(condition).toContain(`to_tsvector('simple', "entity"."title") @@`);
+      expect(condition).toContain(`plainto_tsquery('simple', :searchText0)`);
+      // Значение уходит как есть: шаблон LIKE здесь не при чём.
+      expect(parameters).toEqual({ searchText0: 'ada' });
+    });
+
+    it('PostgreSQL: у фразы важен порядок слов — phraseto_tsquery', () => {
+      expect(runOn('postgres', '"ada lovelace"').condition).toContain('phraseto_tsquery');
+    });
+
+    it('PostgreSQL: язык влияет и на разбор колонки, и на разбор запроса', () => {
+      const { condition } = runOn('postgres', 'ada', { language: 'russian' });
+
+      expect(condition).toContain(`to_tsvector('russian', "entity"."title")`);
+      expect(condition).toContain(`plainto_tsquery('russian', :searchText0)`);
+    });
+
+    it('язык проверяется: имя подставляется в SQL, а не передаётся параметром', () => {
+      expect(() =>
+        runOn('postgres', 'ada', { language: "simple'); DROP TABLE author; --" })
+      ).toThrow(ODataInvalidQueryError);
+    });
+
+    it('MySQL: MATCH … AGAINST в булевом режиме', () => {
+      const { condition, parameters } = runOn('mysql', 'ada');
+
+      expect(condition).toContain('MATCH("entity"."title") AGAINST(:searchText0 IN BOOLEAN MODE)');
+      // Кавычки обезвреживают операторы булева режима: `-ada` не должно означать исключение.
+      expect(parameters).toEqual({ searchText0: '"ada"' });
+    });
+
+    it('MySQL: операторы булева режима не проходят внутрь', () => {
+      expect(runOn('mysql', '-ada').parameters).toEqual({ searchText0: '"-ada"' });
+    });
+
+    /**
+     * Один и тот же код обычно работает на SQLite в разработке и на PostgreSQL в продакшене.
+     * Падать на этом различии он не должен, поэтому режим молча остаётся 'like'.
+     */
+    it('SQLite и MS SQL остаются на LIKE', () => {
+      expect(runOn('sqlite', 'ada').condition).toContain('LIKE :searchText0');
+      expect(runOn('mssql', 'ada').condition).toContain('LIKE :searchText0');
+    });
+
+    it('числовые колонки сравниваются на равенство в любом режиме', () => {
+      expect(runOn('postgres', '42').condition).toContain('"entity"."age" = :searchNumber0');
+    });
   });
 
-  test('должен добавить только числовой поиск, если текстовых колонок нет, а $search – число', () => {
-    const metadata = createMockMetadata([
-      { propertyName: 'age', type: 'integer' },
-      { propertyName: 'salary', type: 'decimal' },
-    ]);
-    const $search = '50000';
-
-    processSearch(queryBuilder, metadata, $search, alias);
-
-    const [brackets, params]: WhereResult = (queryBuilder.andWhere as jest.Mock).mock.calls[0];
-
-    expect(params).toEqual({ numberSearchValue: 50000 });
-    expect(params).not.toHaveProperty('textSearchValue');
-
-    const innerQb = {
-      where: jest.fn().mockReturnThis(),
-      orWhere: jest.fn().mockReturnThis(),
-    } as Partial<WhereExpressionBuilder>;
-
-    brackets.whereFactory(innerQb as WhereExpressionBuilder);
-
-    expect(innerQb.where).toHaveBeenCalledWith('"entity"."age" = :numberSearchValue');
-    expect(innerQb.orWhere).toHaveBeenCalledWith('"entity"."salary" = :numberSearchValue');
-  });
-
-  test('не должен добавлять никаких условий, если $search пустая строка', () => {
-    const metadata = createMockMetadata([{ propertyName: 'title', type: 'varchar' }]);
-
-    processSearch(queryBuilder, metadata, '', alias);
-    expect(queryBuilder.andWhere).not.toHaveBeenCalled();
-  });
-
-  test('не должен добавлять условий, если $search null или undefined', () => {
-    const metadata = createMockMetadata([{ propertyName: 'title', type: 'varchar' }]);
-
-    // @ts-ignore
-    processSearch(queryBuilder, metadata, null as string, alias);
-
-    expect(queryBuilder.andWhere).not.toHaveBeenCalled();
-
-    // @ts-ignore
-    processSearch(queryBuilder, metadata, undefined as string, alias);
-
-    expect(queryBuilder.andWhere).not.toHaveBeenCalled();
-  });
-
-  test('должен правильно обрабатывать $search с пробелами', () => {
-    const metadata = createMockMetadata([{ propertyName: 'title', type: 'varchar' }]);
-    const $search = '  hello world  ';
-
-    processSearch(queryBuilder, metadata, $search, alias);
-
-    const [, params]: WhereResult = (queryBuilder.andWhere as jest.Mock).mock.calls[0];
-
-    expect(params.textSearchValue).toBe('%hello world%');
-  });
-
-  test('должен обрабатывать $search, начинающийся с числа, как строку, если есть текстовые колонки', () => {
-    const metadata = createMockMetadata([
-      { propertyName: 'code', type: 'varchar' },
-      { propertyName: 'age', type: 'integer' },
-    ]);
-    const $search = '123abc';
-
-    processSearch(queryBuilder, metadata, $search, alias);
-
-    const [, params]: WhereResult = (queryBuilder.andWhere as jest.Mock).mock.calls[0];
-
-    expect(params).toEqual({ textSearchValue: '%123abc%' });
-    expect(params).not.toHaveProperty('numberSearchValue');
+  describe('ошибки выражения', () => {
+    it('незакрытая кавычка отвергается', () => {
+      expect(() => run(textAndNumber, '"ada')).toThrow(ODataInvalidQueryError);
+    });
   });
 });

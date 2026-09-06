@@ -42,7 +42,7 @@ yarn docker:build
 
 ```bash
 yarn install
-yarn verify                  # lint + формат + документация + тесты + сборка
+yarn verify                  # lint + формат + документация + тесты + сборка + загрузка пакета
 yarn db:up && yarn test:all  # матрица на трёх СУБД, базы из compose
 ```
 
@@ -59,13 +59,14 @@ yarn db:up && yarn test:all  # матрица на трёх СУБД, базы �
 | `yarn test:mysql` | Тот же набор на MySQL |
 | `yarn test:all` | Последовательно на всех трёх СУБД |
 | `yarn test:coverage` | Тесты с измерением покрытия и проверкой порогов из `jest.config.js` |
-| `yarn verify` | lint + формат + документация + тесты + сборка — то же, что делает CI |
+| `yarn verify` | lint + формат + документация + тесты + сборка + загрузка пакета — то же, что делает CI |
 | `yarn lint` | ESLint по всем `.ts` / `.tsx`, включая `examples/` |
 | `yarn lint:fix` | То же с автоисправлением |
 | `yarn format` | Prettier по всему репозиторию с записью изменений |
 | `yarn format:check` | Только проверка формата — этот вариант и стоит в CI |
 | `yarn docs:check` | Ссылки, якоря и примеры кода в документации (см. `scripts/docs-check.ts`) |
-| `yarn build` | Чистая пересборка в `build/` (`rm -rf ./build && tsc -p tsconfig.build.json`) |
+| `yarn build` | Чистая пересборка обоих форматов: CommonJS в `build/src`, модули ES в `build/esm` |
+| `yarn build:check` | Загрузить собранный пакет настоящим Node — и как CommonJS, и как модуль ES |
 | `yarn db:up` | Поднять PostgreSQL и MySQL для прогона с хоста |
 | `yarn db:down` | Погасить их (данные в tmpfs, сохранять нечего) |
 | `yarn server` | Поднять демо-сервер из `examples/server` с автоперезапуском |
@@ -145,6 +146,34 @@ npm pack --dry-run --json | node -e "let d='';process.stdin.on('data',c=>d+=c).o
 npm pack --dry-run 2>&1 | grep -c '\.test\.'
 ```
 
+### Двойная публикация: CommonJS и модули ES
+
+`yarn build` собирает пакет дважды одним и тем же кодом:
+
+| Формат | Каталог | Точка входа |
+|---|---|---|
+| CommonJS | `build/src/lib` | условие `require` в `exports` |
+| Модули ES | `build/esm/src/lib` | условие `import` в `exports` |
+
+Различий в конфигурации ровно два — формат модулей и каталог; всё остальное
+`tsconfig.esm.json` наследует у `tsconfig.build.json`, чтобы сборки не разъехались по флагам
+строгости. Объявления типов эмитируются в обе, и каждое условие `exports` указывает
+на своё: с `"type": "module"` в `build/esm` файл `.d.ts` рядом с модулем ES так и читается.
+
+**Почему после `tsc` идёт `scripts/build-esm.ts`.** TypeScript не дописывает расширения
+в путях импортов, а Node в модулях ES требует полный путь — иначе `ERR_MODULE_NOT_FOUND`
+на первом же импорте. Канонический способ — писать `from './dialect/index.js'` прямо
+в исходниках — потребовал бы правки каждого импорта и отдельного `moduleNameMapper` в Jest:
+под ts-jest путь резолвится по файловой системе, где лежит `index.ts`, а не `index.js`.
+Поэтому расширения проставляются одним шагом сборки, и там же — в файлы внутри чужих пакетов
+(`odata-v4-sql/lib/visitor` → `…/visitor.js`), которым в модулях ES тоже нужен полный путь.
+Путь, который не разрешается ни во что, роняет сборку.
+
+**Проверка.** `yarn build:check` загружает собранный пакет настоящим Node — по имени пакета,
+то есть через ту же карту `exports`, по которой его будут разрешать потребители, — и в обоих
+форматах вызывает `createFilter`. Без такого шага двойная публикация ломается тихо: тесты
+идут через ts-jest и настоящий пакет не грузят.
+
 ### Быстрая проверка компиляции OData без БД
 
 Самый удобный способ посмотреть, во что превращается конкретный запрос:
@@ -189,10 +218,13 @@ src/
 ├── lib/                     ← публикуемый код
 │   ├── index.ts             публичный API
 │   ├── types.ts             общие типы
-│   ├── TypeOrmVisitor/      обход AST OData, ядро компиляции
+│   ├── odataParser/         строка OData → дерево разбора (свой, зависимостей нет)
+│   ├── TypeOrmVisitor/      обход дерева, ядро компиляции
+│   ├── literal/             литерал OData → значение и текст SQL
 │   ├── createQuery/         query string → посетитель
 │   ├── createFilter/        одно выражение $filter → посетитель
 │   ├── ODataQueryMiddleware/ обработчик Express
+│   ├── dialect/             драйвер → диалект и его возможности (в баррель не входит)
 │   ├── metadata/            схема сервиса: $metadata в CSDL XML
 │   └── executeQuery/
 │       ├── executeQuery/               Repository | QueryBuilder → выполнение
@@ -200,7 +232,11 @@ src/
 │       │   └── parseQueryParams/       нормализация типов
 │       ├── queryToOdataString/         объект → query string
 │       ├── processIncludes/            includes → LEFT JOIN
-│       ├── processSearch/              $search → LIKE / равенство
+│       ├── nestedPageCondition/        вложенный $top / $skip → оконная функция
+│       ├── applyNestedPagination/      он же запасным путём, по дереву сущностей
+│       ├── parseSearch/                грамматика $search → дерево
+│       ├── processSearch/              дерево $search → SQL
+│       ├── relationSource/             связь → подзапрос: общий для $search и лямбд
 │       └── mapToObject/                Map → объект
 └── test/                    ← тесты и фикстуры (в пакет не идут)
     ├── fixtures/            ← сущности и данные; их же берёт демо-сервер
@@ -218,7 +254,9 @@ examples/server/             ← демо-сервер на Express (те же �
 ├── client/                  код страницы-конструктора (TypeScript → модули ES)
 └── public/                  разметка, стили и результат сборки client/ (в .gitignore)
 scripts/
-└── docs-check.ts            проверка ссылок, якорей и примеров кода в документации
+├── docs-check.ts            проверка ссылок, якорей и примеров кода в документации
+├── build-esm.ts             доводка сборки в модули ES: расширения в импортах
+└── check-package.ts         загрузка собранного пакета в обоих форматах
 docs/                        ← эта документация
 ```
 
@@ -454,7 +492,7 @@ yarn server
 `package.json` с собственным `typeorm`, и две копии библиотеки давали несовместимые типы —
 файл не компилировался вовсе.
 
-Коллекция Postman на 51 запрос, включая папку «Ошибки» с ожидаемыми `400`:
+Коллекция Postman на 62 запроса, включая папку «Ошибки» с ожидаемыми `400`:
 [`examples/postman/`](../examples/postman/). Каждый запрос проверен против живого сервера.
 
 Типы демо проверяются в CI (`yarn server:typecheck`) — раньше он не был покрыт ничем

@@ -1,21 +1,12 @@
 /**
  * @file Компиляция полной OData query string (или уже разобранного AST) в объект-посетитель TypeORM.
  *
- * Цепочка: строка → парсер `odata-v4-parser` → AST (`Token`) → обход через `TypeOrmVisitor`
- * (наследник `odata-v4-sql` Visitor) → результат с полями `where`, `select`, `orderby`, `parameters`,
- * вложенными `includes` для `$expand` и т.д.
- *
- * `SQLLang.Oracle` выставляется не ради синтаксиса Oracle, а ради формата плейсхолдеров:
- * именно ветка `asOracleSql()` в базовом посетителе переписывает позиционные `?` в именованные `:pN`,
- * которые умеет связывать TypeORM QueryBuilder. Побочный эффект — Oracle-стиль пагинации
- * (`OFFSET … ROWS FETCH NEXT … ROWS ONLY`) в методе `TypeOrmVisitor.from()`; на сценарий с
- * QueryBuilder он не влияет, потому что там пагинацию делает сам TypeORM.
+ * Цепочка: строка → `parseQueryOptions` → AST (`Token`) → обход через `TypeOrmVisitor` →
+ * результат с полями `where`, `select`, `orderby`, `parameters`, вложенными `includes`
+ * для `$expand` и т.д.
  */
-import { query } from 'odata-v4-parser';
-import type { Token } from 'odata-v4-parser/lib/lexer';
-import { SQLLang } from 'odata-v4-sql';
-
 import { ODataError, ODataParseError } from '../errors';
+import { parseQueryOptions, type Token } from '../odataParser';
 import { TypeOrmVisitor } from '../TypeOrmVisitor';
 import type { SqlOptions } from '../types';
 
@@ -46,31 +37,23 @@ import type { SqlOptions } from '../types';
  * queryBuilder.andWhere(compiled.where).setParameters(mapToObject(compiled.parameters));
  */
 export function createQuery(odataQuery: string | Token, options: SqlOptions): TypeOrmVisitor {
-  options.type = SQLLang.Oracle;
-
   const visitor = new TypeOrmVisitor(options);
   // Строка парсится в дерево токенов; если передан Token — повторный разбор не нужен.
-  const ast: Token = <Token>(typeof odataQuery == 'string' ? parseOrThrow(odataQuery) : odataQuery);
-  const visit = visitor.Visit(ast);
-  // asType() обязателен: он приводит плейсхолдеры к формату TypeORM (`?` → `:pN`).
-  const type = visit.asType();
+  const ast: Token = typeof odataQuery === 'string' ? parseOrThrow(odataQuery) : odataQuery;
 
-  return type;
+  return visitor.Visit(ast);
 }
 
 /**
- * Разбор строки с приведением ошибки парсера к типизированной.
+ * Разбор строки с приведением любой неожиданной ошибки к типизированной.
  *
- * `odata-v4-parser` бросает безымянный `Error` с текстом `Fail at 0`. Оборачиваем его
- * здесь — в единственном месте, где ещё известна исходная строка, — чтобы HTTP-слой мог
+ * Сам `parseQueryOptions` уже бросает `ODataParseError`; обёртка остаётся страховкой
+ * на случай ошибки, которую разбор не предусмотрел, — чтобы HTTP-слой в любом случае мог
  * отличить ошибку клиента от внутреннего сбоя, не разбирая текст сообщения.
- *
- * Ошибки самой библиотеки (`ODataError` из обхода AST) пропускаются как есть: они уже
- * типизированы и несут более точную причину.
  */
 function parseOrThrow(odataQuery: string): Token {
   try {
-    return query(odataQuery) as Token;
+    return parseQueryOptions(odataQuery);
   } catch (e) {
     if (e instanceof ODataError) {
       throw e;

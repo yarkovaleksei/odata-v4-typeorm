@@ -8,6 +8,7 @@
 import type { ObjectLiteral, Repository } from 'typeorm';
 
 import { executeQuery } from '../../lib/executeQuery';
+import type { ExecuteQueryOptions } from '../../lib/executeQuery';
 import type { QueryParams } from '../../lib/types';
 import { Author, Book, Category, Review } from '../fixtures';
 import { dataSource } from '../setup/dataSource';
@@ -63,11 +64,44 @@ export function unwrap<T extends ObjectLiteral>(result: T[] | { items: T[] }): T
 export async function rows<T extends ObjectLiteral>(
   repository: Repository<T>,
   query: QueryParams,
-  alias: string
+  alias: string,
+  options: Omit<ExecuteQueryOptions, 'alias'> = {}
 ): Promise<T[]> {
-  const result = await executeQuery(repository, query, { alias });
+  const result = await executeQuery(repository, query, { alias, ...options });
 
   return Array.isArray(result) ? result : result.items;
+}
+
+/**
+ * Собирает SQL, отправленный в базу за время вызова.
+ *
+ * Нужен там, где проверяется не результат, а способ его получить: вложенная пагинация
+ * обязана уходить в SQL, и по одним лишь возвращённым данным отличить это от среза
+ * в памяти невозможно — результат в обоих случаях одинаковый.
+ */
+export async function captureSql<T>(
+  run: () => Promise<T>
+): Promise<{ result: T; sql: string[]; lastSql: string }> {
+  const sql: string[] = [];
+  const previous = dataSource.logger;
+
+  dataSource.logger = {
+    logQuery: (query: string) => sql.push(query),
+    logQueryError: () => {},
+    logQuerySlow: () => {},
+    logSchemaBuild: () => {},
+    logMigration: () => {},
+    log: () => {},
+  };
+
+  try {
+    const result = await run();
+
+    // Последний запрос — тот, что вернул данные: при `$count=true` перед ним идёт ещё COUNT.
+    return { result, sql, lastSql: sql[sql.length - 1] ?? '' };
+  } finally {
+    dataSource.logger = previous;
+  }
 }
 
 /**
