@@ -151,6 +151,28 @@ describe('createFilter', () => {
       );
     });
 
+    /**
+     * Разбор рекурсивный, поэтому достаточно глубокая вложенность исчерпывает стек.
+     * `RangeError` — не `ODataError`, и без обёртки он ушёл бы наружу как внутренний сбой:
+     * обработчик ответил бы `500` и позвал `next`, то есть строка из запроса роняла бы
+     * запрос в системы наблюдения. Это клиентская ошибка, и код у неё клиентский.
+     */
+    it('запредельная вложенность даёт клиентскую ошибку, а не внутренний сбой', () => {
+      const deep = '('.repeat(20_000) + "name eq 'Ann'" + ')'.repeat(20_000);
+
+      let caught: ODataParseError | undefined;
+
+      try {
+        createFilter(deep, { alias: 'u' });
+      } catch (e) {
+        caught = e as ODataParseError;
+      }
+
+      expect(caught).toBeInstanceOf(ODataParseError);
+      expect(caught?.isClientError).toBe(true);
+      expect(caught?.cause).toBeInstanceOf(RangeError);
+    });
+
     it('ошибка обхода не подменяется на ODataParseError', () => {
       // Выражение разобралось, споткнулась трансляция — тип ошибки должен это отражать.
       let caught: unknown;

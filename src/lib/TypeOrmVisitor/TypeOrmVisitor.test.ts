@@ -1,7 +1,38 @@
 import { ODataUnsupportedError } from '../errors';
-import { parseQueryOptions } from '../odataParser';
-import type { SqlOptions } from '../types';
+import { parseQueryOptions, type Token, TokenType } from '../odataParser';
+import type { RelationResolver, RelationSource, SqlOptions } from '../types';
 import { TypeOrmVisitor } from './TypeOrmVisitor';
+
+/**
+ * Разрешение связей без метаданных: подзапрос собирается из имени связи по одному правилу.
+ *
+ * Настоящий резолвер (`createRelationResolver`) проверяется своими тестами на метаданных
+ * TypeORM. Здесь нужно другое — что посетитель правильно раскладывает лямбду по подзапросу,
+ * — и настоящие метаданные только привязали бы тесты к фикстурам.
+ *
+ * @param known - имена связей, которые резолвер согласен разрешить.
+ */
+function relationResolver(known: readonly string[]): RelationResolver {
+  const source = (childAlias: string, where: string): RelationSource => ({
+    from: `related ${childAlias}`,
+    where,
+    resolveRelation: (navigation, parentAlias, alias) =>
+      known.includes(navigation[navigation.length - 1] ?? '')
+        ? source(alias, `${alias}.parent_id = ${parentAlias}.id`)
+        : undefined,
+    column: (property) => `${childAlias}.${property}`,
+  });
+
+  return (navigation, parentAlias, childAlias) =>
+    known.includes(navigation[navigation.length - 1] ?? '')
+      ? source(childAlias, `${childAlias}.parent_id = ${parentAlias}.id`)
+      : undefined;
+}
+
+/** Узел AST, собранный руками: `createFilter` принимает готовый `Token` от вызывающего кода. */
+function token(type: TokenType, raw: string, value: Record<string, unknown>): Token {
+  return { type, raw, position: 0, next: raw.length, value } as unknown as Token;
+}
 
 describe('TypeOrmVisitor', () => {
   function processQuery(
@@ -305,6 +336,18 @@ describe('TypeOrmVisitor', () => {
     });
 
     it.each([
+      ['ansi', 'CEIL(u.price)'],
+      ['postgres', 'CEIL(u.price)'],
+      ['mysql', 'CEIL(u.price)'],
+      ['sqlite', 'CEIL(u.price)'],
+      ['mssql', 'CEILING(u.price)'],
+    ])('ceiling в диалекте %s', (dialect, expected) => {
+      const { sql } = processQuery('$filter=ceiling(price) eq 10', { dialect });
+
+      expect(sql).toContain(expected);
+    });
+
+    it.each([
       ['ansi', 'CAST(u.createdAt AS DATE)'],
       ['postgres', 'CAST(u.createdAt AS DATE)'],
       ['mssql', 'CAST(u.createdAt AS DATE)'],
@@ -425,8 +468,10 @@ describe('TypeOrmVisitor', () => {
       expect(caught?.message).toContain('not supported');
     });
 
-    it('лямбда-оператор any не поддерживается', () => {
-      // Парсер 0.1.29 теряет тело лямбды, поэтому корректно выполнить такой фильтр нельзя.
+    it('лямбда-оператор без резолвера связей не поддерживается', () => {
+      // Подзапрос строится из имени таблицы и колонок соединения, а их знает только слой
+      // выполнения. Без `resolveRelation` собрать EXISTS не из чего — и запрос отвергается,
+      // а не выполняется без части условия.
       expect(() => processQuery("$filter=posts/any(p: p/title eq 'x')")).toThrow(
         ODataUnsupportedError
       );
@@ -539,6 +584,184 @@ describe('TypeOrmVisitor', () => {
 
       expect(sql).not.toContain('OFFSET');
       expect(sql).not.toContain('FETCH');
+    });
+  });
+
+  describe('Лямбда-операторы', () => {
+    const resolveRelation = relationResolver(['books', 'reviews']);
+
+    it('any разворачивается в EXISTS с подзапросом по связи', () => {
+      const { sql } = processQuery("$filter=books/any(b: b/title eq 'Dune')", {
+        resolveRelation,
+      });
+
+      expect(sql).toContain('EXISTS (SELECT 1 FROM related u_books_b');
+      expect(sql).toContain('u_books_b.parent_id = u.id');
+      expect(sql).toContain('u_books_b.title = :p0');
+    });
+
+    /**
+     * `all` — это отрицание `any` от отрицания условия: «все книги дороже 10» истинно тогда,
+     * когда нет книги дешевле. Через `EXISTS` это выражается без размножения корневых строк.
+     */
+    it('all разворачивается в NOT EXISTS с отрицанием тела', () => {
+      const { sql } = processQuery('$filter=books/all(b: b/pages gt 10)', { resolveRelation });
+
+      expect(sql).toContain('NOT EXISTS (SELECT 1 FROM related u_books_b');
+      expect(sql).toContain('NOT (u_books_b.pages > :p0)');
+    });
+
+    it('лямбда по неизвестной связи отвергается', () => {
+      // Резолвер не нашёл связи — значит, подзапрос собрать не из чего. Отдать при этом
+      // выборку без условия значило бы вернуть чужие строки.
+      let caught: ODataUnsupportedError | undefined;
+
+      try {
+        processQuery('$filter=unknown/any(x: x/id eq 1)', { resolveRelation });
+      } catch (e) {
+        caught = e as ODataUnsupportedError;
+      }
+
+      expect(caught).toBeInstanceOf(ODataUnsupportedError);
+      expect(caught?.feature).toBe('lambda over an unknown navigation property');
+    });
+
+    it('имя без префикса переменной относится к внешнему уровню', () => {
+      const { sql } = processQuery("$filter=books/any(b: name eq 'Ada')", { resolveRelation });
+
+      // `name` — колонка внешней сущности, а не книги: так требует спецификация.
+      expect(sql).toContain('u.name = :p0');
+      expect(sql).not.toContain('u_books_b.name');
+    });
+
+    it('пустой внешний алиас не даёт ведущей точки', () => {
+      // Сценарий «сырого» SQL: запрос к одной таблице без алиаса. С пустым `alias`
+      // внешнее имя должно остаться голым, а не превратиться в '.name'.
+      const ast = parseQueryOptions("$filter=books/any(b: name eq 'Ada')");
+      const visitor = new TypeOrmVisitor({ alias: '', useParameters: true, resolveRelation });
+
+      visitor.Visit(ast);
+
+      expect(visitor.where).toContain('name = :p0');
+      expect(visitor.where).not.toContain('.name');
+    });
+
+    it('путь через связь внутри тела лямбды отвергается', () => {
+      expect(() =>
+        processQuery("$filter=books/any(b: b/author/name eq 'Ada')", { resolveRelation })
+      ).toThrow(ODataUnsupportedError);
+    });
+
+    it('повторная лямбда по той же связи не дублирует её в списке', () => {
+      const ast = parseQueryOptions('$filter=books/any(b: b/id eq 1) and books/any(c: c/id eq 2)');
+      const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true, resolveRelation });
+
+      visitor.Visit(ast);
+
+      // Список связей лямбд нужен слою выполнения, чтобы не строить для них JOIN дважды.
+      expect(visitor.collectNavigationProperties()).toEqual(['books']);
+    });
+
+    it('связь вложенной лямбды не дублирует уже известную внешней', () => {
+      const ast = parseQueryOptions(
+        '$filter=reviews/any(r: r/id eq 1) and books/any(b: b/reviews/any(x: x/id eq 2))'
+      );
+      const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true, resolveRelation });
+
+      visitor.Visit(ast);
+
+      expect(visitor.collectNavigationProperties()).toEqual(['reviews', 'books']);
+    });
+
+    it('нумерация параметров сквозная между телом лямбды и внешним условием', () => {
+      const { parameters } = processQuery(
+        "$filter=name eq 'Ada' and books/any(b: b/title eq 'Dune')",
+        { resolveRelation }
+      );
+
+      // Столкновение `:p0` снаружи и внутри дало бы подстановку чужого значения.
+      expect([...parameters.keys()]).toEqual(['p0', 'p1']);
+      expect(parameters.get('p1')).toBe('Dune');
+    });
+  });
+
+  describe('Сравнение двух литералов null', () => {
+    /**
+     * `null eq null` — вырожденный случай: значение известно ещё при компиляции, а SQL
+     * `NULL = NULL` дало бы неопределённость вместо истины.
+     */
+    it('null eq null сводится к истине', () => {
+      const { sql } = processQuery('$filter=null eq null');
+
+      expect(sql).toContain('WHERE 1 = 1');
+    });
+
+    it('null ne null сводится ко лжи', () => {
+      const { sql } = processQuery('$filter=null ne null');
+
+      expect(sql).toContain('WHERE 1 = 0');
+    });
+  });
+
+  describe('Готовый AST от вызывающего кода', () => {
+    /**
+     * `createFilter` принимает не только строку, но и `Token`. Значит, до обхода может дойти
+     * дерево, которого наш парсер не порождает, и защиты, снаружи выглядящие лишними,
+     * — единственное, что стоит между таким деревом и синтаксически битым SQL.
+     */
+    function visit(node: Token, options: Partial<SqlOptions> = {}) {
+      const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true, ...options });
+
+      return () => visitor.Visit(node);
+    }
+
+    it('узел без обработчика отвергается, а не пропускается', () => {
+      expect(visit(token('ApplyExpression' as TokenType, '$apply=…', {}))).toThrow(
+        ODataUnsupportedError
+      );
+    });
+
+    it('вызов функции без обязательного аргумента отвергается', () => {
+      const node = token(TokenType.MethodCallExpression, 'contains(name)', {
+        method: 'contains',
+        parameters: [token(TokenType.ODataIdentifier, 'name', { name: 'name' })],
+      });
+
+      let caught: ODataUnsupportedError | undefined;
+
+      try {
+        visit(node)();
+      } catch (e) {
+        caught = e as ODataUnsupportedError;
+      }
+
+      expect(caught?.feature).toBe('contains() with 1 argument(s)');
+    });
+
+    it('вызов функции без списка аргументов не падает', () => {
+      const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true });
+
+      visitor.Visit(token(TokenType.MethodCallExpression, 'now()', { method: 'now' }));
+
+      expect(visitor.where).toContain('CURRENT_TIMESTAMP');
+    });
+
+    it('оператор in без списка значений ни с чем не совпадает', () => {
+      const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true });
+
+      visitor.Visit(token(TokenType.InExpression, 'id in ()', {}));
+
+      expect(visitor.where).toBe('1 = 0');
+    });
+
+    it('пустой узел оставляет посетителя в исходном состоянии', () => {
+      // Обход пустого узла — не ошибка: у необязательных ветвей AST (`$filter` без
+      // предиката) значения нет вовсе. Важно, что посетитель при этом получает умолчания,
+      // а не остаётся с пустым WHERE, который склеился бы с соседним фрагментом.
+      const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true });
+
+      expect(() => visitor.Visit(undefined as unknown as Token)).not.toThrow();
+      expect(visitor.where).toBe('1 = 1');
     });
   });
 });
