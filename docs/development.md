@@ -60,12 +60,13 @@ yarn db:up && yarn test:all  # матрица на трёх СУБД, базы �
 | `yarn test:mysql` | Тот же набор на MySQL |
 | `yarn test:all` | Последовательно на всех трёх СУБД |
 | `yarn test:coverage` | Тесты с измерением покрытия и проверкой порогов из `jest.config.js` |
-| `yarn verify` | lint + формат + документация + тесты + сборка + загрузка пакета — то же, что делает CI |
+| `yarn verify` | lint + формат + документация + engines + тесты + сборка + загрузка пакета — то же, что делает CI |
 | `yarn lint` | ESLint по всем `.ts` / `.tsx`, включая `examples/` |
 | `yarn lint:fix` | То же с автоисправлением |
 | `yarn format` | Prettier по всему репозиторию с записью изменений |
 | `yarn format:check` | Только проверка формата — этот вариант и стоит в CI |
 | `yarn docs:check` | Ссылки, якоря и примеры кода в документации (см. `scripts/docs-check.ts`) |
+| `yarn engines:check` | Работают ли зависимости на самой старой поддерживаемой Node |
 | `yarn build` | Чистая пересборка обоих форматов: CommonJS в `build/src`, модули ES в `build/esm` |
 | `yarn build:check` | Загрузить собранный пакет настоящим Node — и как CommonJS, и как модуль ES |
 | `yarn db:up` | Поднять PostgreSQL и MySQL для прогона с хоста |
@@ -256,6 +257,7 @@ examples/server/             ← демо-сервер на Express (те же �
 └── public/                  разметка, стили и результат сборки client/ (в .gitignore)
 scripts/
 ├── docs-check.ts            проверка ссылок, якорей и примеров кода в документации
+├── check-engines.ts         совместимость зависимостей с нижней границей engines.node
 ├── build-esm.ts             доводка сборки в модули ES: расширения в импортах
 └── check-package.ts         загрузка собранного пакета в обоих форматах
 docs/                        ← эта документация

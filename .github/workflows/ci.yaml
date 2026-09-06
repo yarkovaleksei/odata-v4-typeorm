@@ -46,6 +46,14 @@ jobs:
         if: matrix.node-version == '22.x'
         run: yarn docs:check
 
+      # Зависимость, требующая Node новее нашей нижней границы, ломает установку — но только
+      # на самой старой версии матрицы, и разработчик на свежей Node этого не увидит.
+      # Проверка сравнивает `engines` каждой прямой зависимости с минимумом из нашего
+      # `engines.node` и называет виновника, не дожидаясь падения установки.
+      - name: Check dependency engines
+        if: matrix.node-version == '22.x'
+        run: yarn engines:check
+
       - name: Run unit tests
         run: yarn test:unit
 
