@@ -232,6 +232,22 @@ describe('createMetadataDocument', () => {
       expect(propertyNamed(entityTypeNamed(schema, entity), property)._Type).toBe(expected);
     });
 
+    it('ключ UUID описывается как Edm.Guid на любой СУБД', () => {
+      const schema = parseSchema(createMetadataDocument(dataSource));
+      const id = propertyNamed(entityTypeNamed(schema, 'Publisher'), 'id');
+
+      // Физическая колонка у драйверов разная: в PostgreSQL настоящий `uuid`,
+      // в MySQL и SQLite `varchar(36)`. В метаданных TypeORM при этом остаётся
+      // объявленный тип `uuid`, и документ описывает именно модель, а не способ
+      // хранения, — то есть один и тот же `Edm.Guid` везде. Это и правильно:
+      // клиент, читающий схему, не должен видеть разные типы у одного и того же API
+      // только потому, что под ним сменили СУБД.
+      expect(id._Type).toBe('Edm.Guid');
+      expect(id._Nullable).toBe('false');
+      // MaxLength к Edm.Guid неприменим — длина у него фиксирована определением типа.
+      expect(id._MaxLength).toBeUndefined();
+    });
+
     it('обязательность колонки отражена в Nullable', () => {
       const author = entityTypeNamed(parseSchema(createMetadataDocument(dataSource)), 'Author');
 

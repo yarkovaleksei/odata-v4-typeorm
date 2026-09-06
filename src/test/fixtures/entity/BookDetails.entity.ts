@@ -13,8 +13,15 @@ import { Book } from './Book.entity';
 
 @Entity()
 export class BookDetails {
-  @PrimaryGeneratedColumn()
-  id!: number;
+  /**
+   * Второй ключ-UUID в схеме — на владеющей стороне связи «один к одному».
+   *
+   * Вместе с {@link Publisher} это даёт смешанную схему: часть таблиц с числовыми
+   * ключами, часть с UUID, и внешние ключи обоих видов в одной и той же `book`.
+   * Именно так выглядит большинство реальных баз, доросших до нескольких поколений.
+   */
+  @PrimaryGeneratedColumn('uuid')
+  id!: string;
 
   /** Номер ISBN-13 без дефисов; nullable — у старых изданий его нет. */
   @Column({ type: 'varchar', length: 13, nullable: true })

@@ -38,11 +38,16 @@ INSERT INTO post (id, title, content, user_id) VALUES
   (4, 'Bob second post', 'Second post of Bob', 2);
 
 -- ── Издательства ────────────────────────────────────────────────────────────
--- Единственное место с типами date и decimal.
+-- Единственное место с типами date и decimal, и одна из двух таблиц с ключом UUID.
+--
+-- ПРО UUID. Значения версии 4 и записаны строкой: строковый литерал принимают все три
+-- СУБД — PostgreSQL приведёт его к своему типу uuid и заодно проверит формат, MySQL
+-- и SQLite положат в varchar(36) как есть. Те же значения объявлены в ids.ts, и тест
+-- uuidKeys.matrix сверяет их с содержимым базы.
 INSERT INTO publisher (id, name, country, founded_on, royalty_rate) VALUES
-  (1, 'Clarendon Press', 'GB', '1586-01-01', 12.50),
-  (2, 'MIT Press', 'US', '1962-06-15', 9.75),
-  (3, 'Manning Digital', 'US', '1990-11-30', 7.00);
+  ('0f8fad5b-d9cb-469f-a165-70867728950e', 'Clarendon Press', 'GB', '1586-01-01', 12.50),
+  ('7c9e6679-7425-40de-944b-e07fc1f90ae7', 'MIT Press', 'US', '1962-06-15', 9.75),
+  ('9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d', 'Manning Digital', 'US', '1990-11-30', 7.00);
 
 -- ── Разделы каталога ────────────────────────────────────────────────────────
 -- Корни отдельной командой: MySQL проверяет внешний ключ построчно, и ссылка
@@ -77,19 +82,22 @@ INSERT INTO author (id, name, age, rating, is_active, registered_at, bio) VALUES
 -- ── Книги ───────────────────────────────────────────────────────────────────
 -- Книга 5 намеренно без автора и без раздела: проверяет, что $expand делает
 -- LEFT JOIN, а не INNER. Издательство есть у всех — связь объявлена обязательной.
+-- Внешний ключ на издательство — UUID, на автора и раздел — число: в одной таблице
+-- сходятся оба вида ключей, как в базе, дожившей до нескольких поколений схемы.
 INSERT INTO book (id, title, pages, author_id, publisher_id, category_id) VALUES
-  (1, 'Analytical Engine', 300, 1, 1, 3),
-  (2, 'Notes on Numbers', 120, 1, 1, 2),
-  (3, 'Compiler Theory', 450, 2, 2, 3),
-  (4, 'Enigma Machines', 210, 3, 2, 3),
-  (5, 'Orphan Book', 90, NULL, 3, NULL);
+  (1, 'Analytical Engine', 300, 1, '0f8fad5b-d9cb-469f-a165-70867728950e', 3),
+  (2, 'Notes on Numbers', 120, 1, '0f8fad5b-d9cb-469f-a165-70867728950e', 2),
+  (3, 'Compiler Theory', 450, 2, '7c9e6679-7425-40de-944b-e07fc1f90ae7', 3),
+  (4, 'Enigma Machines', 210, 3, '7c9e6679-7425-40de-944b-e07fc1f90ae7', 3),
+  (5, 'Orphan Book', 90, NULL, '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d', NULL);
 
 -- ── Выходные данные ─────────────────────────────────────────────────────────
 -- Есть не у всех книг: связь «один к одному» обязана давать null там, где записи нет.
+-- Вторая таблица с ключом UUID; при этом ссылка на книгу остаётся числовой.
 INSERT INTO book_details (id, isbn, summary, release_time, book_id) VALUES
-  (1, '9780000000001', 'A machine that never was', '09:00:00', 1),
-  (2, NULL, 'Short notes on numeric methods', NULL, 2),
-  (3, '9780000000003', NULL, '18:45:00', 3);
+  ('1e5c2a70-6c1f-4c9e-8a2b-3d4e5f607182', '9780000000001', 'A machine that never was', '09:00:00', 1),
+  ('2f6d3b81-7d2e-4daf-9b3c-4e5f60718293', NULL, 'Short notes on numeric methods', NULL, 2),
+  ('3a7e4c92-8e3f-4eb0-ac4d-5f6071829304', '9780000000003', NULL, '18:45:00', 3);
 
 -- ── Метки ───────────────────────────────────────────────────────────────────
 INSERT INTO tag (id, label) VALUES

@@ -5,5 +5,6 @@
  */
 export * from './database';
 export * from './entity';
+export * from './ids';
 export * from './namingStrategy';
 export * from './seed';

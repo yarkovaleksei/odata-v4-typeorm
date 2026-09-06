@@ -12,10 +12,27 @@
 import type { SchemaField } from './types.js';
 
 /** Категория поля: по ней выбирается уместное выражение. */
-export type FieldKind = 'string' | 'number' | 'boolean' | 'datetime' | 'time' | 'other';
+export type FieldKind =
+  | 'string'
+  | 'guid'
+  | 'number'
+  | 'boolean'
+  | 'datetime'
+  | 'time'
+  | 'other';
 
 const EDM_KINDS: Record<Exclude<FieldKind, 'other'>, readonly string[]> = {
-  string: ['Edm.String', 'Edm.Guid'],
+  string: ['Edm.String'],
+
+  /**
+   * GUID выделен из строк намеренно.
+   *
+   * Текстовые функции к нему неприменимы: в PostgreSQL это отдельный тип, и
+   * `contains(id,'0f8f')` превращается в `uuid LIKE text` — ошибку уровня СУБД.
+   * В `$search` он тоже не участвует. Осмысленно с ним только сравнение целиком,
+   * поэтому и пример для него отдельный.
+   */
+  guid: ['Edm.Guid'],
   number: [
     'Edm.Byte',
     'Edm.Int16',

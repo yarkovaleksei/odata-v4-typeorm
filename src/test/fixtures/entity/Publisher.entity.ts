@@ -16,8 +16,18 @@ import { Book } from './Book.entity';
 
 @Entity()
 export class Publisher {
-  @PrimaryGeneratedColumn()
-  id!: number;
+  /**
+   * Первичный ключ — UUID, а не счётчик: в реальных приложениях так чаще, и путь
+   * «строковый ключ» обязан быть проверен наравне с числовым.
+   *
+   * Физическую колонку TypeORM подбирает под драйвер: в PostgreSQL это настоящий `uuid`,
+   * в MySQL и SQLite — `varchar(36)`, потому что типа `uuid` там нет. В метаданных при
+   * этом остаётся объявленный тип, поэтому `$metadata` описывает ключ одинаково
+   * (`Edm.Guid`) на любой СУБД, а `$search` не трогает его ни на одной: `uuid` не входит
+   * в список текстовых типов.
+   */
+  @PrimaryGeneratedColumn('uuid')
+  id!: string;
 
   @Column({ type: 'varchar', length: 120 })
   name!: string;

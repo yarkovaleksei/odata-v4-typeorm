@@ -70,6 +70,7 @@ export function generateExamples(
 
   // ── Фильтры по типам полей ────────────────────────────────────────────────
   const [stringField] = byKind('string');
+  const [guidField] = byKind('guid');
   const [booleanField] = byKind('boolean');
   const [dateField] = byKind('datetime');
 
@@ -90,6 +91,16 @@ export function generateExamples(
         $filter: `length(${name}) gt 2 and startswith(${name},${quote(String(value).slice(0, 1))})`,
       });
       add('Поиск по всем полям ($search)', { $search: fragmentOf(value) });
+    }
+  }
+
+  if (guidField) {
+    const value = valueOf(rows, guidField.name);
+
+    if (value !== undefined) {
+      // Единственное осмысленное выражение для GUID — сравнение целиком: подстроки
+      // и длина к нему неприменимы, см. `edm.ts`.
+      add('Равенство по ключу UUID', { $filter: `${guidField.name} eq ${quote(value)}` });
     }
   }
 
@@ -127,8 +138,11 @@ export function generateExamples(
 
   if (nullableField) {
     add('Сравнение с null', { $filter: `${nullableField.name} eq null` });
+    // Второе условие намеренно `ne null`, а не сравнение с числом: ключ бывает и UUID,
+    // и тогда `id ge 1` — сравнение строки с числом, то есть ошибка уровня СУБД.
+    // Здесь важна только скобочная группировка, а не смысл второго условия.
     add('Отрицание — нужны явные скобки', {
-      $filter: `(not (${nullableField.name} eq null)) and ${first} ge 1`,
+      $filter: `(not (${nullableField.name} eq null)) and ${first} ne null`,
     });
   }
 
