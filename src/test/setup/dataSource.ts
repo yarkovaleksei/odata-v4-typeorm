@@ -15,6 +15,10 @@
  * но не то, что СУБД его примет: строка `EXTRACT(YEAR FROM …)` может выглядеть правильно
  * и при этом не выполниться. Отличить одно от другого умеет только настоящая база.
  *
+ * ПРО ДРАЙВЕР SQLite. Берётся `better-sqlite3`, а не `sqlite3`: в TypeORM 1.x драйвера
+ * `sqlite` больше нет. Для трансляции разницы никакой — `normalizeDialect` сводит оба
+ * к диалекту `sqlite`, — но `better-sqlite3` ещё и синхронный, что для тестов только плюс.
+ *
  * Сущности и данные — общие с демо-сервером, см. [src/test/fixtures/](../fixtures/).
  */
 import { DataSource, type DataSourceOptions } from 'typeorm';
@@ -81,7 +85,7 @@ export function buildDataSourceOptions(): DataSourceOptions {
       return { ...shared, type: 'mysql', ...resolveConnection('mysql') };
 
     default:
-      return { ...shared, type: 'sqlite', database: ':memory:' };
+      return { ...shared, type: 'better-sqlite3', database: ':memory:' };
   }
 }
 

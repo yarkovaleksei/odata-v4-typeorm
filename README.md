@@ -42,14 +42,15 @@ npm install odata-v4-typeorm-improved
 yarn add odata-v4-typeorm-improved
 ```
 
-`typeorm` — peer-зависимость, версия `^0.3.28`:
+`typeorm` — peer-зависимость, версия `^1.1.1`:
 
 ```bash
 npm install typeorm
 ```
 
-Требуется Node.js 20 или новее. Пакет публикуется в двух форматах — CommonJS и модули ES, —
-поэтому одинаково работает и с `require`, и с `import`.
+Требуется Node.js 20.19 или новее — диапазон повторяет требование самой TypeORM 1.x.
+Пакет публикуется в двух форматах — CommonJS и модули ES, — поэтому одинаково работает
+и с `require`, и с `import`.
 
 ## Попробовать вживую
 

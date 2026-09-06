@@ -10,13 +10,13 @@
 
 # Базовый образ — на Debian trixie, а не bookworm.
 #
-# Причина конкретная: готовые бинарники sqlite3 для linux-x64 собраны под GLIBC 2.38,
-# а в bookworm только 2.36 — `require('sqlite3')` падает с
-# «version `GLIBC_2.38' not found». Trixie даёт 2.41, и prebuilt подходит без пересборки.
+# Причина конкретная: готовые бинарники нативных драйверов для linux-x64 собраны под
+# GLIBC 2.38, а в bookworm только 2.36 — загрузка падала с «version `GLIBC_2.38' not found».
+# Trixie даёт 2.41, и prebuilt подходит без пересборки.
 ARG NODE_VERSION=22
 FROM node:${NODE_VERSION}-trixie-slim
 
-# Нативные модули в зависимостях: sqlite3, а также драйверы pg и mysql2. Для linux/amd64
+# Нативные модули в зависимостях: better-sqlite3, а также драйверы pg и mysql2. Для linux/amd64
 # скачиваются готовые сборки, но на других платформах (например arm64) их может не быть —
 # тогда node-gyp собирает из исходников, и нужны компилятор с python.
 #

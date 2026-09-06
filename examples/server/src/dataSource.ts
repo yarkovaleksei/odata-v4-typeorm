@@ -24,7 +24,8 @@ import { entities, SnakeCaseNamingStrategy } from '../../../src/test/fixtures';
 export { entities };
 
 export const dataSource = new DataSource({
-  type: 'sqlite',
+  // Тот же драйвер, что и в тестах: в TypeORM 1.x драйвера `sqlite` больше нет.
+  type: 'better-sqlite3',
   database: process.env.DB_FILE ?? path.join(__dirname, '..', 'db.db'),
   entities,
   // Схема создаётся из декораторов; миграции демо не нужны, данные наливает seed.sql.

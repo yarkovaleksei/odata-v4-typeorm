@@ -36,9 +36,10 @@ yarn docker:build
 
 | Инструмент | Версия | Примечание |
 |---|---|---|
-| Node.js | 20, 22 или 24 | CI прогоняет все три |
+| Node.js | 20.19+, 22.13+ или 24.11+ | CI прогоняет все три мажорные; нижние границы задаёт TypeORM 1.x |
 | Yarn | 1.x (classic) | Через Corepack; в проекте `yarn.lock` |
-| TypeScript | 6.x | Из devDependencies, глобально ставить не нужно |
+| TypeScript | 6.x | Из devDependencies, глобально ставить не нужно. 7.x пока не берётся: её не поддерживают ни `ts-jest`, ни `typescript-eslint` |
+| TypeORM | 1.x | Peer-зависимость; она же стоит в devDependencies для тестов |
 
 ```bash
 yarn install
