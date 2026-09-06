@@ -18,7 +18,7 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import { DataSource } from 'typeorm';
 
-import { Tag } from '../../../test/fixtures';
+import { Author, Book, Tag } from '../../../test/fixtures';
 import { buildDataSourceOptions, dataSource } from '../../../test/setup/dataSource';
 import { createMetadataDocument } from './createMetadataDocument';
 
@@ -201,11 +201,26 @@ describe('createMetadataDocument', () => {
       expect(navigationNamed(entityTypeNamed(schema, 'Book'), 'author')._Type).toBe('Shop.Author');
     });
 
-    it('спецсимволы в настройках экранируются', () => {
-      const xml = createMetadataDocument(dataSource, { entities: [Tag], namespace: 'A&B"C' });
+    it('составное пространство имён допустимо', () => {
+      const schema = parseSchema(
+        createMetadataDocument(dataSource, { entities: [Tag], namespace: 'Shop.Catalog' })
+      );
+
+      expect(schema._Namespace).toBe('Shop.Catalog');
+      expect(entitySetNamed(schema, 'Tag')._EntityType).toBe('Shop.Catalog.Tag');
+    });
+
+    it('спецсимволы экранируются', () => {
+      // Единственное место, куда произвольная строка попадает по-прежнему, — `edmType`:
+      // это осознанный запасной путь для экзотических типов, и содержимое там на совести
+      // вызывающего кода. Экранирование обязано удержать документ хотя бы читаемым.
+      const xml = createMetadataDocument(dataSource, {
+        entities: [Tag],
+        edmType: () => 'A&B"C',
+      });
 
       expect(XMLValidator.validate(xml)).toBe(true);
-      expect(xml).toContain('Namespace="A&amp;B&quot;C"');
+      expect(xml).toContain('Type="A&amp;B&quot;C"');
     });
   });
 
@@ -433,6 +448,60 @@ describe('createMetadataDocument', () => {
       // TypeORM держит `author_id` отдельной колонкой, но библиотека её не выбирает
       // (она виртуальная), а в модели OData за неё отвечает NavigationProperty.
       expect(book.Property?.map((property) => property._Name)).toEqual(['id', 'title', 'pages']);
+    });
+  });
+
+  /**
+   * Дефект A-16: имена из настроек уезжали в документ без проверки.
+   *
+   * XML при этом оставался корректным, а CSDL — нет, и обнаруживалось это уже у клиента:
+   * он отказывался разбирать схему целиком либо, при совпадении имён наборов, молча
+   * оставлял один из двух. Проверки перенесены на момент сборки документа.
+   */
+  describe('проверка имён (A-16)', () => {
+    it.each([
+      ['пробел', 'not a name'],
+      ['цифра в начале', '1Shop'],
+      ['пустая строка', ''],
+      ['точка внутри имени набора', 'Shop.Catalog'],
+    ])('имя набора с ошибкой «%s» отвергается', (_name, value) => {
+      expect(() =>
+        createMetadataDocument(dataSource, { entities: [Tag], entitySetName: () => value })
+      ).toThrow(/not a valid CSDL identifier/);
+    });
+
+    it.each([
+      ['пробел', 'bad ns'],
+      ['цифра в начале', '1Shop'],
+      ['пустая часть', 'Shop..Catalog'],
+    ])('пространство имён с ошибкой «%s» отвергается', (_name, value) => {
+      expect(() =>
+        createMetadataDocument(dataSource, { entities: [Tag], namespace: value })
+      ).toThrow(/not a valid CSDL namespace/);
+    });
+
+    it('имя контейнера проверяется так же', () => {
+      expect(() =>
+        createMetadataDocument(dataSource, { entities: [Tag], containerName: 'not a name' })
+      ).toThrow(/containerName is not a valid CSDL identifier/);
+    });
+
+    it('одинаковые имена наборов у двух сущностей отвергаются', () => {
+      // Для клиента имя набора — ещё и адрес: два набора под одним именем означают,
+      // что за одним URL стоят две разные сущности.
+      expect(() =>
+        createMetadataDocument(dataSource, {
+          entities: [Author, Book],
+          entitySetName: () => 'Everything',
+        })
+      ).toThrow(/is used by both/);
+    });
+
+    it('сущность, переданная дважды, описывается один раз', () => {
+      const schema = parseSchema(createMetadataDocument(dataSource, { entities: [Tag, Tag] }));
+
+      expect(schema.EntityType?.map((type) => type._Name)).toEqual(['Tag']);
+      expect(schema.EntityContainer.EntitySet?.map((set) => set._Name)).toEqual(['Tag']);
     });
   });
 

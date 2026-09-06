@@ -48,8 +48,53 @@ const TYPES_WITH_PRECISION = [
   'Edm.Duration',
 ];
 
+/**
+ * Простой идентификатор CSDL.
+ *
+ * Спецификация (OData CSDL XML, раздел 4.1) требует: первый символ — буква или
+ * подчёркивание, дальше до 127 букв, цифр и подчёркиваний. Ни пробелов, ни точек,
+ * ни знаков препинания.
+ */
+const SIMPLE_IDENTIFIER = /^[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Nd}\p{Mn}\p{Mc}\p{Pc}\p{Cf}]{0,127}$/u;
+
 /** Значение атрибута XML до экранирования. */
 type AttributeValue = string | number | undefined;
+
+/**
+ * Проверяет, что имя пригодно как идентификатор CSDL.
+ *
+ * Имена приходят из настроек — `namespace`, `containerName` и результат `entitySetName`, —
+ * то есть их пишет вызывающий код, а не библиотека. Без проверки строка с пробелом
+ * или пустая строка молча уезжали бы в документ: XML остался бы корректным, а CSDL —
+ * нет, и обнаружилось бы это уже у клиента, который отказался бы разбирать схему
+ * целиком. См. `docs/audit.md`, дефект A-16.
+ *
+ * @throws {Error} если имя не является простым идентификатором CSDL.
+ */
+function assertSimpleIdentifier(value: string, what: string): void {
+  if (!SIMPLE_IDENTIFIER.test(value)) {
+    throw new Error(
+      `${what} is not a valid CSDL identifier: ${JSON.stringify(value)}. ` +
+        'Expected a letter or underscore followed by letters, digits or underscores.'
+    );
+  }
+}
+
+/**
+ * Проверяет пространство имён: последовательность простых идентификаторов через точку.
+ *
+ * @throws {Error} если хотя бы одна часть непригодна.
+ */
+function assertNamespace(namespace: string): void {
+  const parts = namespace.split('.');
+
+  if (parts.length === 0 || parts.some((part) => !SIMPLE_IDENTIFIER.test(part))) {
+    throw new Error(
+      `namespace is not a valid CSDL namespace: ${JSON.stringify(namespace)}. ` +
+        'Expected one or more dot-separated identifiers, for example "Shop" or "Shop.Catalog".'
+    );
+  }
+}
 
 /** Разобранные настройки плюс вычисленные по ним справочники. */
 interface DocumentContext {
@@ -169,7 +214,51 @@ function resolveEntities(
     ? entities.map((entity) => dataSource.getMetadata(entity))
     : dataSource.entityMetadatas;
 
-  return all.filter(isUsableEntity);
+  // Повтор в списке — оплошность вызывающего кода (обычно склейка двух массивов
+  // с пересечением). Описать сущность дважды невозможно ни в каком смысле: и тип,
+  // и набор получили бы одинаковые имена, то есть документ стал бы невалидным.
+  // Здесь нечего уточнять у пользователя, поэтому дубликаты просто схлопываются.
+  return [...new Set(all)].filter(isUsableEntity);
+}
+
+/**
+ * Сопоставляет каждой сущности имя её набора и проверяет получившиеся имена.
+ *
+ * Имя набора задаётся вызывающим кодом, и две сущности легко получают одно и то же —
+ * например, если `entitySetName` обрезает или приводит имя к нижнему регистру.
+ * В CSDL имена наборов внутри контейнера обязаны быть уникальны, а для клиента имя
+ * набора — ещё и адрес: два набора под одним именем означают, что за одним URL стоят
+ * две разные сущности, и какая из них ответит, зависит от того, какую клиент разобрал
+ * последней. Такое расхождение обязано падать здесь, а не проявляться у клиента.
+ *
+ * @throws {Error} если имя непригодно как идентификатор CSDL либо повторяется.
+ */
+function resolveEntitySetNames(
+  entities: EntityMetadata[],
+  entitySetName: (metadata: EntityMetadata) => string
+): Map<EntityMetadata, string> {
+  const names = new Map<EntityMetadata, string>();
+  const taken = new Map<string, string>();
+
+  for (const metadata of entities) {
+    const name = entitySetName(metadata);
+
+    assertSimpleIdentifier(name, `entity set name for ${metadata.name}`);
+
+    const owner = taken.get(name);
+
+    if (owner !== undefined) {
+      throw new Error(
+        `entity set name ${JSON.stringify(name)} is used by both ${owner} and ${metadata.name}. ` +
+          'Entity set names must be unique within a container.'
+      );
+    }
+
+    taken.set(name, metadata.name);
+    names.set(metadata, name);
+  }
+
+  return names;
 }
 
 /** Одно свойство `EntityType`. */
@@ -383,13 +472,18 @@ export function createMetadataDocument(
     edmType,
   } = options;
 
+  // Имена проверяются до обхода сущностей: незачем строить документ, который заведомо
+  // не будет разобран клиентом.
+  assertNamespace(namespace);
+  assertSimpleIdentifier(containerName, 'containerName');
+
   const entities = resolveEntities(dataSource, options.entities);
 
   const context: DocumentContext = {
     namespace,
     includeHiddenColumns,
     edmType,
-    entitySetNames: new Map(entities.map((metadata) => [metadata, entitySetName(metadata)])),
+    entitySetNames: resolveEntitySetNames(entities, entitySetName),
   };
 
   const lines: string[] = ['<?xml version="1.0" encoding="UTF-8"?>'];
