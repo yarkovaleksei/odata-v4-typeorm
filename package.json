@@ -41,8 +41,9 @@
     "db:up": "docker compose up -d --wait postgres mysql",
     "release": "yarn build && npm publish",
     "release:beta": "yarn build && npm publish --tag beta",
-    "server": "nodemon --watch examples/server/src --watch src/lib --ext ts --exec \"ts-node --project examples/server/tsconfig.json examples/server/src/server.ts\"",
-    "server:typecheck": "tsc --noEmit --project examples/server/tsconfig.json"
+    "server": "nodemon --watch examples/server/src --watch examples/server/client --watch src/lib --ext ts --exec \"ts-node --project examples/server/tsconfig.json examples/server/src/server.ts\"",
+    "server:typecheck": "tsc --noEmit --project examples/server/tsconfig.json && tsc --noEmit --project examples/server/tsconfig.client.json",
+    "client:build": "tsc --project examples/server/tsconfig.client.json"
   },
   "repository": {
     "type": "git",

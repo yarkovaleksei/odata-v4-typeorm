@@ -20,6 +20,7 @@
  * поэтому она вынесена на `$schema` — путь, которого в спецификации нет и который ни с чем
  * не спутаешь.
  */
+import { execFileSync } from 'child_process';
 import * as path from 'path';
 
 import express, { type Request, type Response } from 'express';
@@ -29,6 +30,7 @@ import {
   executeQuery,
   isODataClientError,
   ODataMetadataMiddleware,
+  resolveEdmType,
   type QueryParams,
 } from 'odata-v4-typeorm-improved';
 
@@ -84,7 +86,15 @@ const ROUTE_BY_ENTITY = new Map<unknown, string>(
 /**
  * Описание полей и связей сущности для конструктора.
  *
- * Страница подставляет эти имена в подсказки, чтобы не приходилось помнить схему наизусть.
+ * Страница строит по нему всё, что зависит от схемы: список ресурсов, подсказки полей
+ * под `$select` и `$expand` и готовые примеры запросов. Ничего из этого в разметке
+ * не зашито — иначе правка сущности расходилась бы со страницей молча.
+ *
+ * `edmType` — тот же тип, что уходит в `$metadata` (`Edm.String`, `Edm.Int32`,
+ * `Edm.DateTimeOffset`, …). Он и позволяет генерировать примеры по типу поля: для строки
+ * уместен `contains`, для числа — сравнение, для даты — `year()`. Выводить это на клиенте
+ * из имени типа колонки СУБД значило бы держать вторую копию той же таблицы соответствий,
+ * которая уже есть в библиотеке.
  */
 function describeResource(name: ResourceName) {
   const { entity, alias } = RESOURCES[name];
@@ -101,6 +111,7 @@ function describeResource(name: ResourceName) {
       .map((column) => ({
         name: column.propertyName,
         type: typeof column.type === 'function' ? column.type.name.toLowerCase() : String(column.type),
+        edmType: resolveEdmType(column),
         nullable: column.isNullable,
       })),
     relations: metadata.relations.map((relation) => ({
@@ -152,7 +163,33 @@ function odataHandler(name: ResourceName) {
   };
 }
 
+/**
+ * Компилирует код страницы из TypeScript в модули ES.
+ *
+ * Делается при каждом старте, а не отдельной командой: `nodemon` следит и за
+ * `examples/server/client`, поэтому правка исходника перезапускает сервер и тут же
+ * пересобирает страницу. Держать собранные файлы в репозитории при этом не нужно —
+ * они в `.gitignore`.
+ *
+ * Ошибка компиляции роняет запуск намеренно. Отдать страницу, собранную из прошлой версии
+ * исходника, значит показать поведение, которого в коде уже нет, — а разойтись они могут
+ * незаметно, ровно как раньше расходились примеры со схемой.
+ */
+function buildClient(): void {
+  const project = path.join(__dirname, '..', 'tsconfig.client.json');
+
+  // Компилятор берётся из зависимостей проекта, а не из PATH: глобального tsc может
+  // не быть, а версия глобального — отличаться от той, на которой всё проверялось.
+  const tsc = require.resolve('typescript/bin/tsc');
+
+  console.log('Сборка страницы конструктора…');
+
+  execFileSync(process.execPath, [tsc, '--project', project], { stdio: 'inherit' });
+}
+
 export async function start(): Promise<void> {
+  buildClient();
+
   await dataSource.initialize();
   await seedDatabase(dataSource);
 

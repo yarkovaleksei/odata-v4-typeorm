@@ -1,0 +1,33 @@
+{
+  // Отдельный проект для кода страницы. Держать его в основном tsconfig нельзя:
+  // там подключены типы Node, и `fs` или `process` в браузерном коде прошли бы проверку
+  // молча, а упали бы уже у пользователя.
+  "compilerOptions": {
+    "target": "es2022",
+
+    // Модули ES — их браузер понимает сам, без сборщика. Импорты пишутся с расширением
+    // `.js` (`./schema.js`), и компилятор оставляет их как есть: разрешать пути будет
+    // браузер. Отсюда же требование `moduleResolution: bundler` — только он допускает
+    // такую запись при поиске исходников.
+    "module": "es2022",
+    "moduleResolution": "bundler",
+
+    // Только DOM: ни `@types/node`, ни `@types/jest` сюда не подтягиваются.
+    "lib": ["es2022", "dom"],
+    "types": [],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+
+    // Карты исходников: в отладчике браузера открывается .ts, а не результат компиляции.
+    "sourceMap": true,
+
+    "rootDir": "client",
+    "outDir": "public/js"
+  },
+  "include": ["client/**/*"]
+}

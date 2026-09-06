@@ -191,6 +191,50 @@ select:focus {
   width: auto;
 }
 
+/*
+ * Подсказки с именами полей и связей выбранной сущности.
+ *
+ * Не просто список: нажатие добавляет имя в поле ввода или убирает его оттуда, поэтому
+ * это кнопки, а не span. Собрать `$select` из семи колонок мышкой быстрее, чем набрать
+ * их без опечаток.
+ */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Связь, возвращающая массив: в $expand она ведёт себя иначе, чем одиночная. */
+.chip--collection::after {
+  margin-left: 4px;
+  content: '[]';
+  opacity: 0.6;
+}
+
+.chip--active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
 .hint {
   margin: 5px 0 0;
   color: var(--muted);

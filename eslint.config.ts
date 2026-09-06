@@ -7,7 +7,12 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   typeormTypescriptRecommended,
   {
-    ignores: ['node_modules', 'build', 'examples', '**/*.js'],
+    /**
+     * `**\/*.js` покрывает и результат компиляции страницы-конструктора
+     * (`examples/server/public/js`): линтовать сгенерированный код незачем,
+     * а его исходники на TypeScript проверяются наравне с остальным кодом.
+     */
+    ignores: ['node_modules', 'build', '**/*.js'],
   },
   {
     languageOptions: {

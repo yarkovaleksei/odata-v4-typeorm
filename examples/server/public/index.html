@@ -42,20 +42,30 @@
           </p>
         </div>
 
-        <div class="field-row">
-          <div class="field">
-            <label for="select">$select</label>
-            <input id="select" spellcheck="false" placeholder="id,title" />
-          </div>
-          <div class="field">
-            <label for="expand">$expand</label>
-            <input id="expand" spellcheck="false" placeholder="author,category" />
-          </div>
+        <div class="field">
+          <label for="select">
+            $select
+            <span class="tag">колонки сущности</span>
+          </label>
+          <input id="select" spellcheck="false" list="select-options" />
+          <datalist id="select-options"></datalist>
+          <div id="select-chips" class="chips" aria-label="Поля выбранной сущности"></div>
+        </div>
+
+        <div class="field">
+          <label for="expand">
+            $expand
+            <span class="tag">связи сущности</span>
+          </label>
+          <input id="expand" spellcheck="false" list="expand-options" />
+          <datalist id="expand-options"></datalist>
+          <div id="expand-chips" class="chips" aria-label="Связи выбранной сущности"></div>
         </div>
 
         <div class="field">
           <label for="orderby">$orderby</label>
-          <input id="orderby" spellcheck="false" placeholder="title asc" />
+          <input id="orderby" spellcheck="false" list="orderby-options" />
+          <datalist id="orderby-options"></datalist>
         </div>
 
         <div class="field-row">
@@ -110,9 +120,11 @@
       </section>
 
       <section class="panel examples" aria-label="Готовые примеры">
-        <h2>Примеры</h2>
+        <h2>Примеры <span id="examples-resource" class="tag"></span></h2>
         <p class="hint">
-          Нажмите на пример — он подставится в форму. Отмеченные
+          Примеры собираются под выбранную сущность: по её полям, связям и реальным
+          значениям из базы — поэтому каждый возвращает непустой результат. Нажмите —
+          он подставится в форму и выполнится. Отмеченные
           <span class="tag tag--error">400</span> показывают, как библиотека отвергает
           неподдерживаемое, вместо того чтобы молча вернуть не те данные.
         </p>
@@ -120,6 +132,10 @@
       </section>
     </main>
 
-    <script src="./app.js"></script>
+    <!--
+      Модули ES напрямую, без сборщика. Исходники — TypeScript в examples/server/client/,
+      компиляция запускается при старте сервера (см. buildClient в server.ts).
+    -->
+    <script type="module" src="./js/main.js"></script>
   </body>
 </html>
