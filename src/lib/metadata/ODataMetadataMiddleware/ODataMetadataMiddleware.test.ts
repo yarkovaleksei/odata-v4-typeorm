@@ -7,27 +7,22 @@
  */
 import type { NextFunction, Request, Response } from 'express';
 import type { DataSourceOptions } from 'typeorm';
-import { Column, DataSource, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { DataSource } from 'typeorm';
 
+import { Tag } from '../../../test/fixtures';
+import { buildDataSourceOptions } from '../../../test/setup/dataSource';
 import { ODataMetadataMiddleware } from './ODataMetadataMiddleware';
 
-@Entity()
-class Article {
-  @PrimaryGeneratedColumn()
-  id!: number;
-
-  @Column()
-  title!: string;
-}
-
-/** Параметры подключения: своя база на каждый тест, чтобы можно было её закрывать. */
-const options: DataSourceOptions = {
-  type: 'sqlite',
-  database: ':memory:',
-  synchronize: false,
-  entities: [Article],
-  logging: false,
-};
+/**
+ * Параметры подключения: своя база на каждый тест, чтобы её можно было закрывать,
+ * не трогая общую.
+ *
+ * `synchronize: false` обязателен. Схема уже создана общим подключением, а повторный
+ * `synchronize` из второго подключения к тем же PostgreSQL или MySQL подрался бы с ним
+ * за системный каталог. Документу `$metadata` схема в базе и не нужна — он строится
+ * по метаданным TypeORM.
+ */
+const options: DataSourceOptions = { ...buildDataSourceOptions(), synchronize: false };
 
 /**
  * Мок Response с фиксацией кода, заголовков и тела ответа.
@@ -112,14 +107,14 @@ describe('ODataMetadataMiddleware', () => {
 
   describe('успешный ответ', () => {
     it('отдаёт XML, а не JSON', () => {
-      const { state } = run(ODataMetadataMiddleware(dataSource, { logger }));
+      const { state } = run(ODataMetadataMiddleware(dataSource, { logger, entities: [Tag] }));
 
       // Ради этого обработчик и существует: клиенты OData разбирают `$metadata` как XML,
       // и JSON-представление модели, хотя и описано в спецификации, им не подходит.
       expect(state.status).toBe(200);
       expect(state.contentType).toBe('application/xml');
       expect(String(state.body)).toContain('<edmx:Edmx');
-      expect(String(state.body)).toContain('<EntitySet Name="Article" EntityType="Default.Article"/>');
+      expect(String(state.body)).toContain('<EntitySet Name="Tag" EntityType="Default.Tag"/>');
     });
 
     it('объявляет версию протокола заголовком', () => {

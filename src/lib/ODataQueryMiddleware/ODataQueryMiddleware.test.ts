@@ -8,7 +8,7 @@
  */
 import type { NextFunction, Request, Response } from 'express';
 
-import { Author } from '../../test/entity';
+import { Author } from '../../test/fixtures';
 import { dataSource } from '../../test/setup/dataSource';
 import { ODataQueryMiddleware } from './ODataQueryMiddleware';
 

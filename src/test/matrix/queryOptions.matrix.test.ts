@@ -6,7 +6,7 @@
  * где отступление зафиксировано.
  */
 import { executeQuery } from '../../lib/executeQuery';
-import { Author, Book } from '../entity';
+import { Author, Book } from '../fixtures';
 import { dataSource } from '../setup/dataSource';
 import { authorIds, bookIds, rows, runMatrix, type MatrixCase } from './helpers';
 

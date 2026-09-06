@@ -13,8 +13,7 @@
  */
 import { DataSource } from 'typeorm';
 
-import { buildDataSourceOptions } from './dataSource';
-import { testDatabase } from './testDatabase';
+import { buildDataSourceOptions, testDatabase } from './dataSource';
 
 export default async function globalSetup(): Promise<void> {
   if (testDatabase === 'sqlite') {

@@ -209,5 +209,6 @@ odata-v4-typeorm-improved
 | [src/lib/metadata/createMetadataDocument/](../src/lib/metadata/createMetadataDocument/) | `EntityMetadata` → документ `$metadata` в CSDL XML |
 | [src/lib/metadata/edmType/](../src/lib/metadata/edmType/) | Типы колонок TypeORM → примитивные типы EDM |
 | [src/lib/metadata/ODataMetadataMiddleware/](../src/lib/metadata/ODataMetadataMiddleware/) | Обработчик Express для маршрута `$metadata` |
-| [src/test/](../src/test/) | Сущности и обвязка для интеграционных тестов |
+| [src/test/fixtures/](../src/test/fixtures/) | Сущности и данные; ими же пользуется демо-сервер |
+| [src/test/](../src/test/) | Обвязка интеграционных тестов и матрица совместимости |
 | [examples/server/](../examples/server/) | Демо-сервер на Express |

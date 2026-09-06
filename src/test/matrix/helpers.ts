@@ -9,9 +9,9 @@ import type { ObjectLiteral, Repository } from 'typeorm';
 
 import { executeQuery } from '../../lib/executeQuery';
 import type { QueryParams } from '../../lib/types';
-import { Author, Book, Review } from '../entity';
+import { Author, Book, Category, Review } from '../fixtures';
 import { dataSource } from '../setup/dataSource';
-import { testDatabase, type TestDatabase } from '../setup/testDatabase';
+import { testDatabase, type TestDatabase } from '../setup/dataSource';
 
 /**
  * Выполняет OData-запрос и возвращает идентификаторы найденных строк в порядке выдачи.
@@ -43,6 +43,11 @@ export function bookIds(query: QueryParams): Promise<number[]> {
 /** То же по {@link Review}. */
 export function reviewIds(query: QueryParams): Promise<number[]> {
   return ids(dataSource.getRepository(Review), query, 'Review');
+}
+
+/** То же по {@link Category} — сущности со ссылкой на саму себя. */
+export function categoryIds(query: QueryParams): Promise<number[]> {
+  return ids(dataSource.getRepository(Category), query, 'Category');
 }
 
 /**

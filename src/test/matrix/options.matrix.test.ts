@@ -5,22 +5,13 @@
  * метаданных построителя, экранирования идентификаторов и итогового SQL.
  */
 import {
-  Column,
-  DataSource,
-  DefaultNamingStrategy,
-  Entity,
-  PrimaryGeneratedColumn,
-  type NamingStrategyInterface,
-} from 'typeorm';
-
-import {
   executeQuery,
   ODataInvalidQueryError,
   ODataParseError,
   ODataUnsupportedError,
   isODataClientError,
 } from '../../lib';
-import { Author } from '../entity';
+import { Author, User } from '../fixtures';
 import { dataSource } from '../setup/dataSource';
 import { authorIds, rows, unwrap } from './helpers';
 
@@ -315,84 +306,35 @@ describe('классификация ошибок', () => {
 /**
  * Дефект A-05: `$search` подставлял в SQL имя свойства класса вместо имени колонки и
  * цитировал идентификаторы жёстко зашитыми двойными кавычками. При snake_case-стратегии
- * запрос падал с `no such column: Account.firstName`.
+ * запрос падал с `no such column: Author.isActive`.
+ *
+ * Отдельного подключения этому блоку больше не нужно: весь набор фикстур работает под
+ * `SnakeCaseNamingStrategy`, то есть имена колонок в базе не совпадают с именами свойств
+ * во **всех** тестах, а не в одном специальном. Здесь проверка остаётся прицельной —
+ * чтобы при падении сразу было видно, что сломался именно этот разрыв.
  */
-describe('$search при нестандартной namingStrategy', () => {
-  class SnakeNamingStrategy extends DefaultNamingStrategy implements NamingStrategyInterface {
-    override columnName(propertyName: string, customName: string): string {
-      return customName || propertyName.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
-    }
-  }
-
-  @Entity()
-  class Account {
-    @PrimaryGeneratedColumn()
-    id!: number;
-
-    @Column()
-    firstName!: string;
-
-    @Column('integer')
-    yearsOld!: number;
-  }
-
-  let snakeDataSource: DataSource;
-
-  beforeAll(async () => {
-    snakeDataSource = new DataSource({
-      type: 'sqlite',
-      database: ':memory:',
-      synchronize: true,
-      entities: [Account],
-      namingStrategy: new SnakeNamingStrategy(),
-      logging: false,
-    });
-
-    await snakeDataSource.initialize();
-  });
-
-  afterAll(async () => {
-    await snakeDataSource.destroy();
-  });
-
-  beforeEach(async () => {
-    await snakeDataSource.synchronize(true);
-    await snakeDataSource
-      .getRepository(Account)
-      .save([
-        { firstName: 'Anna', yearsOld: 30 },
-        { firstName: 'Boris', yearsOld: 40 },
-      ]);
-  });
-
+describe('$search и имена колонок, отличные от имён свойств', () => {
   it('ищет по текстовой колонке', async () => {
-    const result = await executeQuery(
-      snakeDataSource.getRepository(Account),
-      { $search: 'ann' },
-      { alias: 'Account' }
-    );
+    const result = await rows(dataSource.getRepository(Author), { $search: 'codebreak' }, 'Author');
 
-    expect(unwrap<Account>(result as Account[]).map((a) => a.firstName)).toEqual(['Anna']);
+    expect(result.map((author) => author.name)).toEqual(['Alan']);
   });
 
   it('ищет по числовой колонке', async () => {
-    const result = await executeQuery(
-      snakeDataSource.getRepository(Account),
-      { $search: '40' },
-      { alias: 'Account' }
-    );
+    const result = await rows(dataSource.getRepository(Author), { $search: '45' }, 'Author');
 
-    expect(unwrap<Account>(result as Account[]).map((a) => a.firstName)).toEqual(['Boris']);
+    expect(result.map((author) => author.name)).toEqual(['Grace']);
   });
 
-  it('$filter по тому же полю тоже работает', async () => {
-    const result = await executeQuery(
-      snakeDataSource.getRepository(Account),
-      { $filter: "firstName eq 'Anna'" },
-      { alias: 'Account' }
-    );
+  it('$filter по колонке со snake_case-именем работает', async () => {
+    // `isActive` в базе называется `is_active`: путь свойства обязан транслироваться.
+    expect(await authorIds({ $filter: 'isActive eq false' })).toEqual([3]);
+  });
 
-    expect(unwrap<Account>(result as Account[])).toHaveLength(1);
+  it('$orderby по колонке со snake_case-именем работает', async () => {
+    expect(await authorIds({ $orderby: 'registeredAt asc', $filter: 'registeredAt ne null' })).toEqual(
+      [1, 2, 4]
+    );
   });
 });
 
@@ -403,65 +345,31 @@ describe('$search при нестандартной namingStrategy', () => {
  * типовое применение — хеши паролей и токены. Собственный `find()` в TypeORM их скрывает,
  * а библиотека возвращала их **на каждом запросе**, даже без единого параметра, потому что
  * строила список SELECT из всех невиртуальных колонок и явно переопределяла умолчание TypeORM.
+ *
+ * Скрытая колонка живёт в общих фикстурах ({@link User.passwordHash}), поэтому проверка
+ * идёт на той же схеме, что и остальные тесты, и на том же наборе данных, что видит демо.
  */
 describe('колонки с select: false', () => {
-  @Entity()
-  class Credential {
-    @PrimaryGeneratedColumn()
-    id!: number;
-
-    @Column()
-    login!: string;
-
-    @Column({ select: false })
-    passwordHash!: string;
-  }
-
-  let hiddenDataSource: DataSource;
-
-  beforeAll(async () => {
-    hiddenDataSource = new DataSource({
-      type: 'sqlite',
-      database: ':memory:',
-      synchronize: true,
-      entities: [Credential],
-      logging: false,
-    });
-
-    await hiddenDataSource.initialize();
-  });
-
-  afterAll(async () => {
-    await hiddenDataSource.destroy();
-  });
-
-  beforeEach(async () => {
-    await hiddenDataSource.synchronize(true);
-    await hiddenDataSource
-      .getRepository(Credential)
-      .save({ login: 'root', passwordHash: 'SECRET-HASH' });
-  });
-
   const query = (params: Record<string, string>) =>
-    executeQuery(hiddenDataSource.getRepository(Credential), params, { alias: 'Credential' });
+    executeQuery(dataSource.getRepository(User), params, { alias: 'User' });
 
   it('скрытая колонка не попадает в ответ по умолчанию', async () => {
-    const result = unwrap<Credential>((await query({})) as Credential[]);
+    const result = unwrap<User>((await query({ $orderby: 'id asc' })) as User[]);
 
-    expect(result[0]).toEqual({ id: 1, login: 'root' });
-    expect(JSON.stringify(result)).not.toContain('SECRET-HASH');
+    expect(result[0]).toEqual({ id: 1, name: 'Alice', email: 'alice@example.com' });
+    expect(JSON.stringify(result)).not.toContain('scrypt');
   });
 
   it('поведение совпадает с find() самого TypeORM', async () => {
-    const viaLibrary = unwrap<Credential>((await query({})) as Credential[]);
-    const viaTypeorm = await hiddenDataSource.getRepository(Credential).find();
+    const viaLibrary = unwrap<User>((await query({ $orderby: 'id asc' })) as User[]);
+    const viaTypeorm = await dataSource.getRepository(User).find({ order: { id: 'ASC' } });
 
     expect(viaLibrary).toEqual(viaTypeorm);
   });
 
   it.each([
     ['$select', { $select: 'id,passwordHash' }],
-    ['$filter', { $filter: "passwordHash eq 'SECRET-HASH'" }],
+    ['$filter', { $filter: "passwordHash eq 'scrypt$alice$00000000'" }],
     ['$orderby', { $orderby: 'passwordHash asc' }],
   ])('обращение к скрытой колонке через %s отвергается', async (_name, params) => {
     // $filter и $orderby не возвращают значение колонки, но работают как оракул:
@@ -470,8 +378,8 @@ describe('колонки с select: false', () => {
   });
 
   it('обычные колонки по-прежнему доступны', async () => {
-    const result = unwrap<Credential>((await query({ $select: 'id,login' })) as Credential[]);
+    const result = unwrap<User>((await query({ $select: 'id,name', $orderby: 'id asc' })) as User[]);
 
-    expect(result[0]).toEqual({ id: 1, login: 'root' });
+    expect(result[0]).toEqual({ id: 1, name: 'Alice' });
   });
 });

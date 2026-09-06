@@ -5,8 +5,7 @@
  * сразу — включая чисто модульные, которым БД не нужна. Это осознанный размен: чуть более
  * медленный старт взамен на то, что в тестах не нужно помнить про инициализацию.
  */
-import { clearDatabase, dataSource, seedDatabase } from './dataSource';
-import { testDatabase } from './testDatabase';
+import { clearDatabase, dataSource, seedDatabase, testDatabase } from './dataSource';
 
 /**
  * Подключение к внешней БД поднимается дольше, чем SQLite в памяти. Пятнадцати секунд
@@ -36,6 +35,6 @@ afterAll(async () => {
 beforeEach(async () => {
   // Данные пересоздаются перед каждым тестом, поэтому порядок и независимость тестов
   // гарантированы даже при записи в БД.
-  await clearDatabase();
-  await seedDatabase();
+  await clearDatabase(dataSource);
+  await seedDatabase(dataSource);
 });

@@ -1,8 +1,8 @@
 /**
- * @file Тестовая сущность для матрицы совместимости с OData.
+ * @file Основная сущность матрицы совместимости с OData.
  *
- * В отличие от минимальных {@link User} / {@link Post}, здесь намеренно собраны все категории
- * типов, которые по-разному ведут себя при трансляции OData → SQL:
+ * Здесь намеренно собраны все категории типов, которые по-разному ведут себя
+ * при трансляции OData → SQL:
  *
  * | Поле           | Тип        | Что проверяет                                        |
  * |----------------|------------|------------------------------------------------------|
@@ -13,12 +13,16 @@
  * | `registeredAt` | дата-время | `year` / `month` / `day`, сравнение с датой-временем |
  * | `bio`          | text, null | `eq null` → `IS NULL`, `ne null` → `IS NOT NULL`     |
  *
+ * Состав колонок зафиксирован: на нём стоят десятки проверок матрицы, которые сверяют
+ * выборку по умолчанию. Новые типы колонок добавляются в {@link Publisher}
+ * и {@link BookDetails}, а не сюда.
+ *
  * Связь `books` даёт первый уровень `$expand`; через {@link Book} доступен и второй
  * (`$expand=books($expand=reviews)`).
  */
 import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 
-import { DATETIME_COLUMN_TYPE } from '../setup/testDatabase';
+import { DATETIME_COLUMN_TYPE } from '../database';
 import { Book } from './Book.entity';
 
 @Entity()
@@ -44,8 +48,7 @@ export class Author {
    * Nullable намеренно: единственный способ проверить `IS NULL` на дате.
    *
    * Тип берётся из {@link DATETIME_COLUMN_TYPE}: `datetime` понимают MySQL и SQLite,
-   * `timestamp` — PostgreSQL и MySQL, общего для всех трёх нет. Положиться на вывод типа
-   * из TypeScript здесь нельзя — у `Date | null` метаданные декоратора дают `Object`.
+   * `timestamp` — PostgreSQL и MySQL, общего для всех трёх нет.
    */
   @Column({ type: DATETIME_COLUMN_TYPE, nullable: true })
   registeredAt!: Date | null;

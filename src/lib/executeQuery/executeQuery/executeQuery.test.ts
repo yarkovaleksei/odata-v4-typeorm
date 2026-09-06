@@ -1,6 +1,6 @@
 import type { Repository } from 'typeorm';
 
-import { User } from '../../../test/entity/User.entity';
+import { User } from '../../../test/fixtures';
 import { dataSource } from '../../../test/setup/dataSource';
 import type { GetManyResponse } from '../types';
 import { executeQuery } from './executeQuery';

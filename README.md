@@ -66,7 +66,7 @@ yarn server
 Там же отдаётся схема сервиса: <http://localhost:3001/api/$metadata> — готовый документ
 CSDL XML, который можно скормить клиенту OData как есть.
 
-Там же лежит коллекция Postman на 40 запросов: [examples/postman/](./examples/postman/).
+Там же лежит коллекция Postman на 51 запрос: [examples/postman/](./examples/postman/).
 
 ## Быстрый старт
 

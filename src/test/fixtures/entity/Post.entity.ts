@@ -1,7 +1,7 @@
 /**
- * @file Тестовая сущность «публикация» — обратная сторона связи с {@link User}.
+ * @file Публикация пользователя — обратная сторона связи с {@link User}.
  *
- * `user` объявлен nullable (`User | null`), чтобы можно было проверять преобразование
+ * `user` объявлен nullable (`User | null`), чтобы проверять преобразование
  * `$filter=user eq null` в SQL `IS NULL`. Колонка `content` имеет явный тип `text` —
  * он входит в белый список `searchableTextColumnTypes` и участвует в `$search`.
  */

@@ -9,10 +9,10 @@
  *
  * После старта:
  * - `http://localhost:3001/` — страница-конструктор: собрать запрос мышкой и увидеть ответ;
- * - `http://localhost:3001/api/posts` — сам OData-эндпоинт;
+ * - `http://localhost:3001/api/books` — сам OData-эндпоинт;
  * - `http://localhost:3001/api/$metadata` — схема сервиса в CSDL XML, как её ждут
  *   клиенты OData (`ra-data-odata-server`, `@odata/client`, Excel);
- * - `http://localhost:3001/api/posts/$schema` — список полей и связей сущности в JSON.
+ * - `http://localhost:3001/api/books/$schema` — список полей и связей сущности в JSON.
  *
  * ПРО ДВА РАЗНЫХ ОПИСАНИЯ СХЕМЫ. `$metadata` — стандартный путь OData, и по нему обязан
  * лежать документ CSDL XML: клиенты разбирают его как XML и на JSON не рассчитывают.
@@ -32,27 +32,40 @@ import {
   type QueryParams,
 } from 'odata-v4-typeorm-improved';
 
+import {
+  Author,
+  Book,
+  BookDetails,
+  Category,
+  Post,
+  Publisher,
+  Review,
+  seedDatabase,
+  Tag,
+  User,
+} from '../../../src/test/fixtures';
 import { dataSource } from './dataSource';
-import { Author } from './entities/author';
-import { Post } from './entities/post';
-import { PostCategory } from './entities/postCategory';
-import { PostComment } from './entities/postComment';
-import { User } from './entities/user';
-import { seed } from './seed';
 
 /**
  * Сущности, доступные через API.
  *
- * Ключ — сегмент пути (`/api/posts`), значение — класс сущности и алиас. Алиас совпадает
+ * Ключ — сегмент пути (`/api/books`), значение — класс сущности и алиас. Алиас совпадает
  * с именем класса: он идёт в SQL префиксом колонок, и совпадение делает генерируемые
  * запросы читаемыми в логе.
+ *
+ * Опубликованы все сущности схемы, кроме представления `BookSummary` — у него нет
+ * первичного ключа, и набором OData оно быть не может.
  */
 const RESOURCES = {
-  posts: { entity: Post, alias: 'Post' },
+  books: { entity: Book, alias: 'Book' },
   authors: { entity: Author, alias: 'Author' },
+  reviews: { entity: Review, alias: 'Review' },
+  publishers: { entity: Publisher, alias: 'Publisher' },
+  categories: { entity: Category, alias: 'Category' },
+  tags: { entity: Tag, alias: 'Tag' },
+  details: { entity: BookDetails, alias: 'BookDetails' },
   users: { entity: User, alias: 'User' },
-  categories: { entity: PostCategory, alias: 'PostCategory' },
-  comments: { entity: PostComment, alias: 'PostComment' },
+  posts: { entity: Post, alias: 'Post' },
 } as const satisfies Record<string, { entity: EntityTarget<ObjectLiteral>; alias: string }>;
 
 type ResourceName = keyof typeof RESOURCES;
@@ -62,7 +75,7 @@ type ResourceName = keyof typeof RESOURCES;
  *
  * Нужен, чтобы имена наборов в `$metadata` совпали с адресами, по которым эти наборы
  * реально лежат: клиент берёт `EntitySet Name` и подставляет его в URL, поэтому набор
- * `Post` при маршруте `/api/posts` привёл бы его в никуда.
+ * `Book` при маршруте `/api/books` привёл бы его в никуда.
  */
 const ROUTE_BY_ENTITY = new Map<unknown, string>(
   (Object.keys(RESOURCES) as ResourceName[]).map((name) => [RESOURCES[name].entity, name])
@@ -82,7 +95,9 @@ function describeResource(name: ResourceName) {
     alias,
     fields: metadata.columns
       // Колонки внешних ключей скрыты: они дублируют связь и в $select бесполезны.
-      .filter((column) => !column.relationMetadata)
+      // Колонки `select: false` — тоже: библиотека отвергает обращение к ним, и подсказка
+      // в конструкторе вела бы прямиком в ошибку 400 (`User.passwordHash`).
+      .filter((column) => !column.relationMetadata && column.isSelect)
       .map((column) => ({
         name: column.propertyName,
         type: typeof column.type === 'function' ? column.type.name.toLowerCase() : String(column.type),
@@ -139,7 +154,7 @@ function odataHandler(name: ResourceName) {
 
 export async function start(): Promise<void> {
   await dataSource.initialize();
-  await seed();
+  await seedDatabase(dataSource);
 
   const app = express();
 
@@ -176,7 +191,7 @@ export async function start(): Promise<void> {
 
   app.listen(port, () => {
     console.log(`Конструктор запросов: http://localhost:${port}/`);
-    console.log(`OData-эндпоинт:       http://localhost:${port}/api/posts`);
+    console.log(`OData-эндпоинт:       http://localhost:${port}/api/books`);
   });
 }
 
