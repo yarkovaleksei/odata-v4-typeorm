@@ -1079,10 +1079,25 @@ export class TypeOrmVisitor {
     this.visitArithmetic(node, context, '%');
   }
 
-  /** Унарный минус: `-age gt -100`. */
+  /**
+   * Унарный минус: `-age gt -100`.
+   *
+   * СКОБКИ ОБЯЗАТЕЛЬНЫ, И НЕ ИЗ-ЗА ПРИОРИТЕТА. Имена колонок в готовой строке SQL
+   * подставляет сам TypeORM (`replacePropertyNamesForTheWholeQuery`), и находит он их
+   * по образцу «пробел, `=`, `(` либо начало строки, затем `алиас.свойство`». Минус
+   * вплотную к алиасу под этот образец не подходит: `-Author.age` оставался в запросе
+   * как есть, PostgreSQL приводил незакавыченное имя к нижнему регистру и отвечал
+   * `invalid reference to FROM-clause entry for table "author"` — при том что таблица
+   * присоединена под алиасом `"Author"`. На SQLite и MySQL то же выражение работало:
+   * там сравнение идентификаторов регистронезависимо, и ошибка не проявлялась.
+   *
+   * Отсюда `-(<операнд>)`: скобка ставит перед алиасом разрешённый символ. Заодно
+   * снимается вопрос приоритета, как и у остальных арифметических операторов.
+   */
   protected VisitNegateExpression(node: Token, context: Context) {
-    this.append(context, '-');
+    this.append(context, '-(');
     this.Visit(node.value, context);
+    this.append(context, ')');
   }
 
   /**
