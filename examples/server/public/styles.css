@@ -103,11 +103,13 @@ h1 {
 .builder {
   grid-area: builder;
 }
+
 .result {
   grid-area: result;
   position: sticky;
   top: 24px;
 }
+
 .examples {
   grid-area: examples;
 }
@@ -271,6 +273,12 @@ select:focus {
   border-radius: 4px;
   background: var(--code-bg);
   font-size: 11px;
+}
+
+ul.hint {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
 }
 
 .actions {

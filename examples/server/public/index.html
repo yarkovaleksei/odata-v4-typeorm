@@ -22,6 +22,7 @@
       }
     </script>
   </head>
+
   <body>
     <header class="page-header">
       <div>
@@ -54,11 +55,15 @@
             spellcheck="false"
             placeholder="contains(title,'SQL') and id gt 2"
           ></textarea>
-          <p class="hint">
-            Сравнения <code>eq ne gt ge lt le</code>, логика <code>and or not</code>, арифметика
-            <code>add sub mul div mod</code>, функции
-            <code>contains startswith tolower length substring replace year cast</code>.
-          </p>
+          <ul class="hint">
+            <li>Сравнения: <code>eq ne gt ge lt le</code></li>
+            <li>Логика: <code>and or not</code></li>
+            <li>Арифметика: <code>add sub mul div mod</code></li>
+            <li>
+              Функции:
+              <code>contains startswith tolower length substring replace year cast</code>
+            </li>
+          </ul>
         </div>
 
         <div class="field">
@@ -88,11 +93,12 @@
           </label>
           <input id="compute" spellcheck="false" placeholder="pages mul 2 as doubled" />
           <p class="hint">
-            Даёт выражению имя, и дальше имя работает как поле — в <code>$filter</code>,
-            <code>$orderby</code> и <code>$select</code>. Справа от <code>as</code> стоит то же
-            выражение, что и в <code>$filter</code>. Несколько имён — через запятую. Названное в
-            <code>$select</code> значение приходит отдельным свойством, а его тип задаёт драйвер
-            СУБД: библиотека не приводит его, потому что колонки у выражения нет.
+            Даёт выражению имя, и дальше имя работает как поле — в
+            <code>$filter</code>, <code>$orderby</code> и <code>$select</code>. Справа от
+            <code>as</code> стоит то же выражение, что и в <code>$filter</code>. Несколько имён —
+            через запятую. Названное в <code>$select</code> значение приходит отдельным свойством, а
+            его тип задаёт драйвер СУБД: библиотека не приводит его, потому что колонки у выражения
+            нет.
           </p>
         </div>
 
@@ -112,17 +118,17 @@
         </div>
 
         <div class="field">
-          <label for="top">$top</label>
+          <label for="top">$top <span class="tag">кол-во записей на страницу</span></label>
           <input id="top" type="number" min="0" max="100" placeholder="—" />
         </div>
 
         <div class="field">
-          <label for="skip">$skip</label>
+          <label for="skip">$skip <span class="tag">сколько элементов пропустить</span></label>
           <input id="skip" type="number" min="0" placeholder="—" />
         </div>
 
         <div class="field">
-          <label for="search">$search</label>
+          <label for="search">$search <span class="tag">поисковый запрос</span></label>
           <input id="search" spellcheck="false" placeholder="—" />
         </div>
 
@@ -132,9 +138,10 @@
             <span>$count — вернуть <code>{ items, count }</code> вместо массива</span>
           </label>
           <p class="hint">
-            Выключен по умолчанию, как требует OData: отсутствующий <code>$count</code> означает
-            <code>false</code>, и ответом будет обычный массив. Включите, чтобы получить общее число
-            строк по фильтрам — без учёта <code>$top</code> и <code>$skip</code>.
+            Выключен по умолчанию, как требует OData: отсутствующий
+            <code>$count</code> означает <code>false</code>, и ответом будет обычный массив.
+            Включите, чтобы получить общее число строк по фильтрам — без учёта <code>$top</code> и
+            <code>$skip</code>.
           </p>
         </div>
 
