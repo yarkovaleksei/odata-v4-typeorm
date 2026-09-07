@@ -371,6 +371,64 @@
           "response": []
         },
         {
+          "name": "Счётчик связанных строк",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($count=true)&$select=id,name",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($count=true)"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name"
+                }
+              ]
+            },
+            "description": "Число связанных строк у каждого родителя. Приходит аннотацией рядом со связью — `books@odata.count`, — как того требует OData JSON (раздел 12): форма самой связи не меняется, `books` остаётся массивом. У автора без книг счётчик равен нулю, а не отсутствует: LEFT JOIN оставляет такого автора в выдаче, и клиент обязан отличать «книг нет» от «не считали»."
+          },
+          "response": []
+        },
+        {
+          "name": "Счётчик вместе со срезом связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($orderby=id desc;$top=1;$count=true)&$select=id,name",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($orderby=id desc;$top=1;$count=true)"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name"
+                }
+              ]
+            },
+            "description": "То, ради чего $count внутри $expand и просят: показать первую запись из скольких-то. Счётчик считает всю связь после вложенного $filter, но ДО вложенных $top и $skip — иначе он всегда равнялся бы размеру страницы и не сообщал бы ничего. Считает его скалярный подзапрос в SELECT: он не зависит ни от соединения, ни от окна, которое вырезает страницу."
+          },
+          "response": []
+        },
+        {
           "name": "Поле связи в $select",
           "request": {
             "method": "GET",
@@ -2328,6 +2386,56 @@
               ]
             },
             "description": "Вычисленные значения материализуются только для корня. Псевдоним во вложенном $select не доехал бы до ответа, поэтому запрос отвергается, а не выполняется частично."
+          },
+          "response": []
+        },
+        {
+          "name": "$count у связи «к одному» — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$expand=author($count=true)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "author($count=true)"
+                }
+              ]
+            },
+            "description": "Считать нечего: у связи «к одному» либо одна запись, либо ни одной, и это видно по самому ответу. Молча проигнорировать опцию нельзя — клиент решил бы, что счётчик просто не поддержан, и не узнал бы, что запрос выполнен не так, как написан."
+          },
+          "response": []
+        },
+        {
+          "name": "$count глубже первого уровня $expand — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($expand=reviews($count=true))",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($expand=reviews($count=true))"
+                }
+              ]
+            },
+            "description": "Счётчики приходят из «сырого» результата и раскладываются по сущностям корня по первичному ключу — тем же способом, что и значения $compute. Для связи связи пришлось бы сопоставлять строки с элементами каждой коллекции по отдельности, и ровно поэтому $compute в $select тоже сделан только для корня."
           },
           "response": []
         }

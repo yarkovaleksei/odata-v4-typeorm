@@ -11,6 +11,8 @@
  *    сортировка, затем опционально `$search`, пагинация и либо `getMany`, либо `getManyAndCount`.
  * 5. `applyNestedPagination` — срез вложенных `$top` / `$skip` уже над деревом сущностей:
  *    в SQL ограничить число связанных строк на каждого родителя одним запросом нельзя.
+ * 6. `collectNestedCounts` — `$count` внутри `$expand`: скалярный подзапрос на связь,
+ *    значение приходит «сырым» и раскладывается по сущностям корня вместе с `$compute`.
  *
  * Порядок шагов 3–4 важен: `$expand` должен быть разобран раньше `$filter`, иначе фильтр по пути
  * `связь/поле` не найдёт JOIN-алиас. За это отвечает `TypeOrmVisitor.queryOptionsSort`.
@@ -25,6 +27,7 @@ import { applyOrderBy } from '../applyOrderBy';
 import { withAutoExpand } from '../autoExpand';
 import type { ColumnTypeResolver, QueryParams } from '../../types';
 import { mapToObject } from '../mapToObject';
+import { collectNestedCounts, type NestedCount } from '../nestedCount';
 import { processIncludes } from '../processIncludes';
 import { processSearch } from '../processSearch';
 import { resolveEdmType } from '../../metadata/edmType';
@@ -212,8 +215,9 @@ function primaryKeyPaths(metadata: EntityMetadata, alias: string): string[] {
  *
  * Две причины, обе техническе, и обе не зависят от того, назвал ли ключ `$select`.
  *
- * **Вычисленные значения `$compute`.** Они приходят из плоского результата отдельно
- * от сущностей, и найти свою строку значение может только по ключу.
+ * **Значения из «сырого» результата.** Вычисленные значения `$compute` и счётчики
+ * `$count` внутри `$expand` приходят отдельно от сущностей, и найти свою строку
+ * значение может только по ключу.
  *
  * **Пагинация вместе с соединениями.** При `take` или `skip` и хотя бы одном `JOIN` TypeORM
  * выполняет запрос в два приёма: сначала выбирает ключи нужной страницы подзапросом
@@ -230,9 +234,10 @@ function primaryKeyPaths(metadata: EntityMetadata, alias: string): string[] {
 function needsPrimaryKey<T extends ObjectLiteral>(
   queryBuilder: SelectQueryBuilder<T>,
   odataQuery: TypeOrmVisitor,
+  nestedCounts: readonly NestedCount[],
   paginated: boolean
 ): boolean {
-  if (odataQuery.computedSelects.length > 0) {
+  if (odataQuery.computedSelects.length > 0 || nestedCounts.length > 0) {
     return true;
   }
 
@@ -601,7 +606,8 @@ function assertAllowed(
 }
 
 /**
- * Материализует вычисленные значения `$compute`, названные в `$select`.
+ * Материализует значения, которых нет в сущности: псевдонимы `$compute` из `$select`
+ * и счётчики `$count` внутри `$expand`.
  *
  * ПОЧЕМУ НЕ `getMany()`. `addSelect(<sql>, <алиас>)` даёт колонку, которой нет в сущности,
  * и сборщик сущностей TypeORM такие колонки отбрасывает. Значения приходится забирать
@@ -613,16 +619,21 @@ function assertAllowed(
  * Поэтому первичный ключ корня уезжает в результат под собственным алиасом, и значение
  * находится по нему.
  *
- * @returns сущности с дописанными свойствами-псевдонимами.
+ * @returns сущности с дописанными свойствами-псевдонимами и счётчиками связей.
  */
-async function selectComputed<T extends ObjectLiteral>(
+async function selectRawExtras<T extends ObjectLiteral>(
   queryBuilder: SelectQueryBuilder<T>,
   odataQuery: TypeOrmVisitor,
+  nestedCounts: readonly NestedCount[],
   metadata: EntityMetadata,
   alias: string
 ): Promise<T[]> {
   for (const { name, sql } of odataQuery.computedSelects) {
     queryBuilder.addSelect(sql, name);
+  }
+
+  for (const { rawAlias, sql } of nestedCounts) {
+    queryBuilder.addSelect(sql, rawAlias);
   }
 
   const escape = createEscape(queryBuilder.connection);
@@ -648,6 +659,7 @@ async function selectComputed<T extends ObjectLiteral>(
 
     // Первая строка группы: у остальных строк той же корневой сущности вычисленные значения
     // те же самые — выражение опирается только на однозначные пути (см. assertComputedIsSingleValued).
+    // Счётчик связи тем более один на корневую сущность: подзапрос не зависит от соединения.
     if (!rows.has(id)) {
       rows.set(id, row);
     }
@@ -665,6 +677,14 @@ async function selectComputed<T extends ObjectLiteral>(
 
     for (const { name } of odataQuery.computedSelects) {
       (entity as ObjectLiteral)[name] = row[name];
+    }
+
+    for (const { property, rawAlias } of nestedCounts) {
+      // Number(), в отличие от значений `$compute`: у счётчика тип известен и одинаков
+      // на всех СУБД, а вот драйверы отдают его по-разному — MySQL присылает `COUNT(*)`
+      // строкой, потому что это `BIGINT`. Оставить строку значило бы отдать `"5"` там,
+      // где корневой `count` отдаёт `5`.
+      (entity as ObjectLiteral)[property] = Number(row[rawAlias]);
     }
   }
 
@@ -688,9 +708,10 @@ async function selectComputed<T extends ObjectLiteral>(
  *   с именем сущности или таблицы.
  *
  * @throws {ODataParseError} некорректный синтаксис OData-параметров.
- * @throws {ODataUnsupportedError} конструкция вне поддерживаемого подмножества OData.
- * @throws {ODataInvalidQueryError} отрицательный `$top` / `$skip` либо обращение к полю
- *   или связи вне белого списка.
+ * @throws {ODataUnsupportedError} конструкция вне поддерживаемого подмножества OData,
+ *   в том числе `$count` глубже первого уровня `$expand`.
+ * @throws {ODataInvalidQueryError} отрицательный `$top` / `$skip`, обращение к полю
+ *   или связи вне белого списка либо `$count` у связи «к одному».
  * @throws {EntityMetadataNotFoundError} у построителя нет метаданных и `alias` не соответствует
  *   ни одной сущности.
  * @throws {QueryFailedError} в `$filter` / `$orderby` указана несуществующая колонка: имена полей
@@ -756,6 +777,16 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
 
   assertNoComputedSelectInExpand(odataQuery);
 
+  // `$count` внутри `$expand`: подзапросы-счётчики собираются здесь, вместе с остальными
+  // проверками, — до того, как что-либо уйдёт в SQL. Пустой массив означает, что счётчиков
+  // не просили, и весь дальнейший конвейер идёт прежним путём.
+  const nestedCounts = collectNestedCounts(
+    inputQueryBuilder.connection,
+    metadata,
+    alias,
+    odataQuery
+  );
+
   let queryBuilder = inputQueryBuilder;
   let rootSelect: string[];
 
@@ -790,7 +821,7 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // перед возвратом, поэтому на форму ответа не влияет: её по-прежнему задаёт один `$select`.
   const paginated = top !== undefined || parsedQueryWithoutSearch.$skip > 0;
   const addedKeys =
-    needsPrimaryKey(inputQueryBuilder, odataQuery, paginated) &&
+    needsPrimaryKey(inputQueryBuilder, odataQuery, nestedCounts, paginated) &&
     odataQuery.select !== VISITOR_DEFAULTS.select
       ? primaryKeyPaths(metadata, alias).filter((path) => !rootSelect.includes(path))
       : [];
@@ -881,12 +912,15 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
     queryBuilder = queryBuilder.take(guardLimit);
   }
 
-  // Вычисленные значения `$compute` в `$select` требуют «сырого» результата: обычный сборщик
-  // сущностей отбрасывает колонки, которых нет в сущности. Отдельная ветка целиком, чтобы
-  // запросы без `$compute` шли прежним путём — вплоть до того же вызова `getManyAndCount()`.
-  if (odataQuery.computedSelects.length > 0) {
-    const items = await selectComputed(queryBuilder, odataQuery, metadata, alias);
-    // Ключ снимается после selectComputed: именно по нему там значение находит свою сущность.
+  // Вычисленные значения `$compute` в `$select` и счётчики `$count` внутри `$expand` требуют
+  // «сырого» результата: обычный сборщик сущностей отбрасывает колонки, которых нет в сущности.
+  // Отдельная ветка целиком, чтобы запросы без них шли прежним путём — вплоть до того же
+  // вызова `getManyAndCount()`.
+  if (odataQuery.computedSelects.length > 0 || nestedCounts.length > 0) {
+    const items = await selectRawExtras(queryBuilder, odataQuery, nestedCounts, metadata, alias);
+    // Ключ снимается после selectRawExtras: именно по нему там значение находит свою сущность.
+    // Срез вложенной страницы идёт после: счётчик уже лежит на родителе и от него не зависит —
+    // `$expand=books($top=2;$count=true)` обязан вернуть две книги и полное их число.
     const page = stripAdded(
       applyNestedPagination(items, odataQuery.includes, paginatedInSql),
       addedKeys,

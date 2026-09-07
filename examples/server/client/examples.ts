@@ -288,6 +288,13 @@ export function generateExamples(
     add('Вложенная пагинация внутри $expand', {
       $expand: `${collection.name}($orderby=id desc;$top=1)`,
     });
+    // Счётчик и срез вместе — то, ради чего $count внутри $expand и просят: показать
+    // первую запись из скольких-то. Счётчик приходит аннотацией `<связь>@odata.count`
+    // и вложенный $top намеренно игнорирует, иначе всегда равнялся бы единице.
+    add('Счётчик связанных строк ($count в $expand)', {
+      $expand: `${collection.name}($orderby=id desc;$top=1;$count=true)`,
+      $select: first,
+    });
 
     const target = findRelationTarget(schema, collection);
     const candidates = target?.relations.filter((relation) => !relation.collection) ?? [];
@@ -363,6 +370,13 @@ export function generateExamples(
   add('Функция без трансляции', { $filter: 'totaloffsetminutes(id) eq 0' }, true);
   add('Несуществующее поле', { $filter: 'nonexistent eq 1' }, true);
   add('Отрицательный $top', { $top: '-5' }, true);
+
+  if (single) {
+    // У связи «к одному» записей либо одна, либо ни одной, и это видно по самому ответу.
+    // Молча проигнорировать опцию нельзя: клиент решил бы, что счётчик не поддержан.
+    add('$count у связи «к одному»', { $expand: `${single.name}($count=true)` }, true);
+  }
+
   // По спецификации совпадение имени со свойством сущности — ошибка, а не переопределение:
   // молча выигранное имя означало бы фильтр не по той колонке.
   add('Имя $compute занято свойством', { $compute: `${first} as ${first}` }, true);
