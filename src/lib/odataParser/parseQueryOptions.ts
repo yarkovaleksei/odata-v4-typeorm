@@ -24,6 +24,7 @@ const KNOWN_OPTIONS = [
   '$skip',
   '$count',
   '$search',
+  '$compute',
 ];
 
 /**
@@ -85,6 +86,8 @@ class QueryOptionsParser {
         return this.list(start, TokenType.OrderBy, TokenType.OrderByItem, () => this.orderByItem());
       case '$expand':
         return this.list(start, TokenType.Expand, TokenType.ExpandItem, () => this.expandItem());
+      case '$compute':
+        return this.list(start, TokenType.Compute, TokenType.ComputeItem, () => this.computeItem());
       case '$top':
         return this.wrap(start, TokenType.Top, this.integer());
       case '$skip':
@@ -162,6 +165,33 @@ class QueryOptionsParser {
     }
 
     return { value: { expr, direction }, start };
+  }
+
+  /**
+   * Элемент `$compute`: выражение и имя, под которым оно становится доступно.
+   *
+   * Форма `<выражение> as <имя>` (раздел 11.2.4.9 спецификации). Ключевое слово `as`
+   * распознаётся как ключевое, а не как идентификатор: иначе `price mul qty as total`
+   * читалось бы как путь свойства `as`, и ошибка указывала бы не туда.
+   *
+   * Имя проверяется здесь только на форму идентификатора. Столкновение с именем свойства
+   * сущности отвергает посетитель: знать состав сущности парсеру неоткуда.
+   */
+  private computeItem(): { value: unknown; start: number } {
+    this.scanner.skipWhitespace();
+
+    const start = this.scanner.position;
+    const expr = this.expressions.parse();
+
+    if (!this.scanner.tryTakeKeyword('as')) {
+      this.scanner.fail('expected "as" followed by a name for the computed expression');
+    }
+
+    this.scanner.skipWhitespace();
+
+    const name = this.scanner.takeIdentifier('a name for the computed expression');
+
+    return { value: { expr, name }, start };
   }
 
   /** Элемент `$expand`: имя связи и, возможно, вложенные опции в скобках. */

@@ -17,6 +17,62 @@ import type { ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 import { VISITOR_DEFAULTS } from '../../TypeOrmVisitor';
 
 /**
+ * Разбивает список сортировки по запятым **верхнего уровня**.
+ *
+ * Простой `split(',')` разрезал бы и аргументы функции: `$orderby=concat(name,bio)` на MySQL
+ * компилируется в `CONCAT(Author.name, Author.bio)`, и половинки уехали бы в `ORDER BY`
+ * отдельными выражениями. Поэтому запятая считается разделителем только вне скобок.
+ */
+function splitTopLevel(orderby: string): string[] {
+  const items: string[] = [];
+  let depth = 0;
+  let current = '';
+
+  for (const character of orderby) {
+    if (character === '(') {
+      depth += 1;
+    } else if (character === ')') {
+      depth -= 1;
+    } else if (character === ',' && depth === 0) {
+      items.push(current);
+      current = '';
+
+      continue;
+    }
+
+    current += character;
+  }
+
+  items.push(current);
+
+  return items;
+}
+
+/**
+ * Отделяет направление сортировки от выражения.
+ *
+ * Направление ищется в конце строки, а не первым пробелом: выражение само по себе бывает
+ * с пробелами — `EXTRACT(YEAR FROM Author.registeredAt)` у `$orderby=year(…)`, `(Author.price
+ * * Author.qty)` у псевдонима `$compute`. Разбор по первому пробелу отдавал в `ORDER BY`
+ * обрубок вроде `EXTRACT(YEAR` и направление `FROM`.
+ *
+ * Регистр не важен, а наружу направление уходит в верхнем: TypeORM сверяет его со списком
+ * `['ASC', 'DESC']` и на `'asc'` бросает `TypeORMError`. Посетитель пишет верхний регистр сам,
+ * но фрагмент сюда попадает и от вызывающего кода напрямую.
+ */
+function splitDirection(item: string): { field: string; order?: 'ASC' | 'DESC' } {
+  for (const order of ['ASC', 'DESC'] as const) {
+    const suffix = ` ${order}`;
+
+    if (item.toUpperCase().endsWith(suffix)) {
+      return { field: item.slice(0, -suffix.length).trim(), order };
+    }
+  }
+
+  return { field: item };
+}
+
+/**
  * Дописывает выражения `$orderby` в `ORDER BY` построителя.
  *
  * @param queryBuilder - построитель; сортировка добавляется через `addOrderBy`, поэтому
@@ -40,11 +96,10 @@ export function applyOrderBy<T extends ObjectLiteral>(
 
   let result = queryBuilder;
 
-  for (const item of orderby.split(',')) {
-    // Посетитель нормализует направление к верхнему регистру, так что split по пробелу
-    // даёт ['Author.name', 'ASC']. Для поля без направления order будет undefined —
-    // TypeORM в этом случае подставит ASC.
-    const [field, order] = item.trim().split(' ');
+  for (const item of splitTopLevel(orderby)) {
+    // Направление посетитель нормализует к верхнему регистру и пишет в конец; для поля без
+    // направления order будет undefined — TypeORM в этом случае подставит ASC.
+    const { field, order } = splitDirection(item.trim());
 
     // Пустой сегмент возможен при лишней запятой в $orderby; добавлять его в ORDER BY
     // нельзя — получится синтаксическая ошибка SQL.
@@ -52,7 +107,7 @@ export function applyOrderBy<T extends ObjectLiteral>(
       continue;
     }
 
-    result = result.addOrderBy(field, order as 'ASC' | 'DESC');
+    result = result.addOrderBy(field, order);
   }
 
   return result;

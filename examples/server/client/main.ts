@@ -42,6 +42,7 @@ function applyExample(example: Example): void {
   form.filter.value = example.query.$filter ?? '';
   form.select.value = example.query.$select ?? '';
   form.expand.value = example.query.$expand ?? '';
+  form.compute.value = example.query.$compute ?? '';
   form.orderby.value = orderby.fields;
   form.orderbyDirection.value = orderby.direction;
   form.top.value = example.query.$top ?? '';

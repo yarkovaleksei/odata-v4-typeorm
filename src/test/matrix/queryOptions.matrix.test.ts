@@ -9,7 +9,7 @@ import { normalizeDialect, supportsNestedPagePushdown } from '../../lib/dialect'
 import { ODataInvalidQueryError } from '../../lib/errors';
 import { executeQuery } from '../../lib/executeQuery';
 import type { QueryParams } from '../../lib/types';
-import { Author, Book, Tag } from '../fixtures';
+import { Author, Book, Publisher, Tag } from '../fixtures';
 import { dataSource, testDatabase } from '../setup/dataSource';
 import {
   authorIds,
@@ -117,6 +117,239 @@ describe('$select', () => {
 
     expect(result.map((r) => r.id).sort()).toEqual([2, 3]);
     expect(Object.keys(result[0]!).sort()).toEqual(['age', 'id']);
+  });
+
+  /**
+   * Дефект A-17: `$select` без первичного ключа вместе с соединением и пагинацией
+   * не выполнялся вовсе.
+   *
+   * При `take` либо `skip` и хотя бы одном `JOIN` TypeORM идёт в два приёма и выбирает ключи
+   * страницы подзапросом `SELECT DISTINCT "distinctAlias"."Author_id" FROM (<исходный запрос>)`.
+   * Ключа не было во внутреннем запросе — не было и колонки, на которую ссылается внешний:
+   * запрос падал ошибкой уровня СУБД. Теперь ключ дописывается в выборку и убирается
+   * из ответа, поэтому форма ответа от `$top` не зависит.
+   */
+  describe('без первичного ключа вместе с соединением и пагинацией (A-17)', () => {
+    const withoutKey = { $select: 'name', $orderby: 'id asc' } as const;
+
+    it('$expand и $top', async () => {
+      const result = await rows(
+        dataSource.getRepository(Author),
+        { ...withoutKey, $expand: 'books', $top: '2' },
+        'Author'
+      );
+
+      expect(result.map((r) => r.name)).toEqual(['Ada', 'Grace']);
+      // Ключ добавлялся ради SQL и в ответ попасть не должен; связь при этом на месте.
+      expect(Object.keys(result[0]!).sort()).toEqual(['books', 'name']);
+    });
+
+    it('$expand и $skip', async () => {
+      const result = await rows(
+        dataSource.getRepository(Author),
+        { ...withoutKey, $expand: 'books', $skip: '2' },
+        'Author'
+      );
+
+      expect(result.map((r) => r.name)).toEqual(['Alan', 'Barbara']);
+    });
+
+    it('соединение из пути в $filter, без $expand', async () => {
+      // Путь `связь/поле` создаёт «виртуальный» include — соединение есть, хотя $expand нет.
+      const result = await rows(
+        dataSource.getRepository(Author),
+        { ...withoutKey, $filter: 'books/pages gt 100', $top: '2' },
+        'Author'
+      );
+
+      expect(result.map((r) => r.name)).toEqual(['Ada', 'Grace']);
+      expect(Object.keys(result[0]!)).toEqual(['name']);
+    });
+
+    it('форма ответа не зависит от того, добавлен ли $top', async () => {
+      const repository = dataSource.getRepository(Author);
+      const query = { ...withoutKey, $expand: 'books' };
+
+      const withoutTop = await rows(repository, query, 'Author');
+      const withTop = await rows(repository, { ...query, $top: '4' }, 'Author');
+
+      expect(Object.keys(withTop[0]!).sort()).toEqual(Object.keys(withoutTop[0]!).sort());
+    });
+
+    it('$count вместе с пагинацией и соединением', async () => {
+      const result = await executeQuery(
+        dataSource.getRepository(Author),
+        { ...withoutKey, $expand: 'books', $top: '2', $count: 'true' },
+        { alias: 'Author' }
+      );
+
+      const page = result as { items: Array<{ name: string }>; count: number };
+
+      expect(page.count).toBe(4);
+      expect(page.items.map((item) => item.name)).toEqual(['Ada', 'Grace']);
+      expect(Object.keys(page.items[0]!).sort()).toEqual(['books', 'name']);
+    });
+
+    it('сущность с ключом UUID', async () => {
+      // Ключ берётся из метаданных, а не по имени `id`, поэтому его тип роли не играет.
+      const result = await rows(
+        dataSource.getRepository(Publisher),
+        { $select: 'name', $expand: 'books', $orderby: 'name asc', $top: '2' },
+        'Publisher'
+      );
+
+      expect(result).toHaveLength(2);
+      expect(Object.keys(result[0]!).sort()).toEqual(['books', 'name']);
+    });
+  });
+});
+
+/**
+ * Дефект A-18, родственный A-17 и найденный тем же прогоном.
+ *
+ * Двухшаговая пагинация ссылается не только на первичный ключ, но и на каждую колонку
+ * сортировки — и точно так же безусловно. Колонка связи, присоединённой ради `$orderby`,
+ * в выборку не попадала, и запрос падал (`no such column: distinctAlias.Author_books_pages`).
+ * Теперь такие колонки дописываются в выборку и убираются из ответа.
+ */
+describe('$orderby по колонке вне выборки вместе с пагинацией (A-18)', () => {
+  it('сортировка по полю связи без $expand', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $orderby: 'books/pages asc', $top: '2' },
+      'Author'
+    );
+
+    expect(result).toHaveLength(2);
+    // Связь присоединялась только ради сортировки — в ответе её быть не должно.
+    expect(result.every((author) => !('books' in author))).toBe(true);
+  });
+
+  it('сортировка по полю связи через два уровня', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $orderby: 'books/reviews/score asc', $top: '2' },
+      'Author'
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result.every((author) => !('books' in author))).toBe(true);
+  });
+
+  it('сортировка по колонке корня, не названной в $select', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $select: 'name', $expand: 'books', $orderby: 'age asc', $top: '2' },
+      'Author'
+    );
+
+    expect(result.map((author) => author.name)).toEqual(['Barbara', 'Ada']);
+    // `age` добавлялась ради сортировки и в ответ попасть не должна.
+    expect(Object.keys(result[0]!).sort()).toEqual(['books', 'name']);
+  });
+
+  it('вложенный $orderby по колонке вне вложенного $select', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      {
+        $expand: 'books($select=title;$orderby=pages asc)',
+        $select: 'name',
+        $orderby: 'name asc',
+        $top: '3',
+      },
+      'Author'
+    );
+
+    const books = result.flatMap((author) => author.books);
+
+    expect(books.length).toBeGreaterThan(0);
+    // `pages` дописывалась ради сортировки связи — в книгах остаётся только запрошенное.
+    expect(books.every((book) => Object.keys(book).length === 1 && 'title' in book)).toBe(true);
+  });
+
+  it('сортировка по псевдониму $compute вместе с соединением', async () => {
+    // Выражение в ORDER BY TypeORM читает как `алиас.колонка` и отказывается строить запрос,
+    // поэтому в сортировку уходит SQL-псевдоним, а выражение — в SELECT.
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $compute: 'age mul -1 as inverted', $orderby: 'inverted asc', $expand: 'books', $top: '2' },
+      'Author'
+    );
+
+    expect(result.map((author) => author.id)).toEqual([2, 3]);
+    // Псевдоним в $select не назывался — свойства в ответе быть не должно.
+    expect(result.every((author) => !('inverted' in author))).toBe(true);
+  });
+
+  it('сортировка по псевдониму $compute внутри $expand упорядочивает связь', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      {
+        $expand: 'books($compute=pages mul -1 as inverted;$orderby=inverted asc)',
+        $select: 'id',
+        $orderby: 'id asc',
+      },
+      'Author'
+    );
+
+    // У Ada книги идут по убыванию страниц: 300, затем 120.
+    expect(result[0]!.books.map((book) => book.pages)).toEqual([300, 120]);
+  });
+
+  it('тот же запрос вместе с пагинацией корня выполняется', async () => {
+    // Проверяется именно выполнимость: раньше запрос отвергался самим TypeORM
+    // (`"(Author_books" alias was not found`), потому что в ORDER BY уходило выражение.
+    //
+    // Число корневых строк здесь не проверяется намеренно: вложенная сортировка по связи
+    // «ко многим» вместе с `$top` корня возвращает их меньше запрошенного — это отдельное
+    // ограничение двухшаговой пагинации, не зависящее от `$compute`; см. соседний тест.
+    const result = await rows(
+      dataSource.getRepository(Author),
+      {
+        $expand: 'books($compute=pages mul -1 as inverted;$orderby=inverted asc)',
+        $select: 'id',
+        $orderby: 'id asc',
+        $top: '2',
+      },
+      'Author'
+    );
+
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0]!.id).toBe(1);
+  });
+
+  it('вложенная сортировка по связи «ко многим» вместе с $top корня режет страницу по строкам', async () => {
+    // ОГРАНИЧЕНИЕ, А НЕ ОЖИДАЕМОЕ ПОВЕДЕНИЕ. При пагинации с соединением TypeORM выбирает
+    // страницу подзапросом `SELECT DISTINCT <ключ>, <колонки сортировки>`: колонка связи
+    // «ко многим» размножает строки, и `LIMIT` отсчитывает их, а не корневые сущности.
+    // У Ada две книги, поэтому `$top=2` отдаёт одного автора вместо двух.
+    //
+    // От `$compute` не зависит — то же самое даёт обычная вложенная сортировка. Тест
+    // фиксирует факт, чтобы расхождение не считалось нормой и было видно при починке.
+    const withNestedOrder = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books($orderby=pages desc)', $select: 'id', $orderby: 'id asc', $top: '2' },
+      'Author'
+    );
+
+    const withoutNestedOrder = await rows(
+      dataSource.getRepository(Author),
+      { $expand: 'books', $select: 'id', $orderby: 'id asc', $top: '2' },
+      'Author'
+    );
+
+    expect(withoutNestedOrder.map((author) => author.id)).toEqual([1, 2]);
+    expect(withNestedOrder.map((author) => author.id)).toEqual([1]);
+  });
+
+  it('без пагинации поведение прежнее — лишних колонок в ответе не появляется', async () => {
+    const result = await rows(
+      dataSource.getRepository(Author),
+      { $select: 'name', $orderby: 'books/pages asc' },
+      'Author'
+    );
+
+    expect(result.every((author) => Object.keys(author).length === 1)).toBe(true);
   });
 });
 

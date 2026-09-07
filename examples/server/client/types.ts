@@ -58,6 +58,7 @@ export interface QueryDraft {
   $filter?: string;
   $select?: string;
   $expand?: string;
+  $compute?: string;
   $orderby?: string;
   $top?: string;
   $skip?: string;

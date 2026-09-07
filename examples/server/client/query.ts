@@ -63,6 +63,7 @@ export function buildQuery(): string {
   add('$filter', form.filter.value);
   add('$select', form.select.value);
   add('$expand', form.expand.value);
+  add('$compute', form.compute.value);
   add('$orderby', buildOrderBy(form.orderby.value, form.orderbyDirection.value));
   add('$top', form.top.value);
   add('$skip', form.skip.value);

@@ -134,7 +134,7 @@ export type ColumnTypeResolver = (propertyPath: string) => string | undefined;
  * в {@link ParsedQueryParams}.
  *
  * Системные опции OData, которых здесь нет и которые библиотека не поддерживает:
- * `$apply`, `$compute`, `$format`, `$levels`, `$skiptoken`, `$deltatoken`, `$id`, `$schemaversion`.
+ * `$apply`, `$format`, `$levels`, `$skiptoken`, `$deltatoken`, `$id`, `$schemaversion`.
  */
 export interface QueryParams {
   $search?: string;
@@ -142,6 +142,7 @@ export interface QueryParams {
   $orderby?: string;
   $select?: string;
   $expand?: string;
+  $compute?: string;
   $top?: string;
   $skip?: string;
   $count?: string;
@@ -159,7 +160,7 @@ export interface QueryParams {
  */
 export type ParsedQueryParams = Pick<
   QueryParams,
-  '$search' | '$filter' | '$orderby' | '$select' | '$expand'
+  '$search' | '$filter' | '$orderby' | '$select' | '$expand' | '$compute'
 > & {
   /**
    * Размер страницы. `undefined` означает «клиент не задавал `$top`» и трактуется как

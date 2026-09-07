@@ -87,8 +87,10 @@ describe('processIncludes', () => {
     } as Partial<TypeOrmVisitor>;
     processIncludes(mockQueryBuilder, odataQuery, alias, parentMetadata);
     expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledTimes(2);
-    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('name', 'asc');
-    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('created', 'desc');
+    // Направление нормализуется к верхнему регистру: TypeORM сверяет его со списком
+    // ['ASC', 'DESC'] и на 'asc' бросает TypeORMError — здесь это скрывал мок.
+    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('name', 'ASC');
+    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('created', 'DESC');
   });
 
   it('должен игнорировать orderby, если он равен "1"', () => {

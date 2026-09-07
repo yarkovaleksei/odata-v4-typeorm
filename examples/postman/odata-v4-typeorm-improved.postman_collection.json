@@ -1532,6 +1532,382 @@
             "description": "Запрос сверх потолка усекается, а не отвергается: в ответе 200, а не 400. Демо ставит maxTop: 100 везде, кроме /api/reviews — там он занижен до 3, иначе на пяти строках усечение неотличимо от его отсутствия. С $count=true разница видна в одном ответе: в items три записи, а count по-прежнему 5 — потолок режет страницу, а не выборку. Тот же пример есть и в конструкторе запросов: он показывает его ровно для тех сущностей, где потолок меньше числа строк."
           },
           "response": []
+        },
+        {
+          "name": "Сортировка по полю связи со страницей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$orderby=books/pages asc&$top=2",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$orderby",
+                  "value": "books/pages asc"
+                },
+                {
+                  "key": "$top",
+                  "value": "2"
+                }
+              ]
+            },
+            "description": "Связь присоединяется только ради сортировки и в ответе не появляется. Раньше такой запрос не выполнялся вовсе: пагинация с соединением ссылается на колонку сортировки, а её не было в выборке (дефект A-18)."
+          },
+          "response": []
+        },
+        {
+          "name": "Страница без первичного ключа в $select",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$select=name&$expand=books&$top=2&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "name"
+                },
+                {
+                  "key": "$expand",
+                  "value": "books"
+                },
+                {
+                  "key": "$top",
+                  "value": "2"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Форма ответа задаётся одним $select и от $top не зависит: ключ и колонка сортировки дописываются в запрос ради SQL и убираются из ответа (дефекты A-17 и A-18)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$compute",
+      "item": [
+        {
+          "name": "Имя выражения в $filter",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul 2 as doubled&$filter=doubled gt 500",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul 2 as doubled"
+                },
+                {
+                  "key": "$filter",
+                  "value": "doubled gt 500"
+                }
+              ]
+            },
+            "description": "Справа от as стоит обычное выражение $filter — новой грамматики опция не вводит. Имя подставляется скомпилированным SQL там, где встретилось."
+          },
+          "response": []
+        },
+        {
+          "name": "Имя выражения в $orderby",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul -1 as inverted&$orderby=inverted asc&$select=id,title,pages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul -1 as inverted"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "inverted asc"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,title,pages"
+                }
+              ]
+            },
+            "description": "Сортировка по вычисленному значению: страницы по убыванию, записанные через возрастание отрицательного."
+          },
+          "response": []
+        },
+        {
+          "name": "Вычисленное значение в ответе",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul 2 as doubled&$select=title,doubled",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul 2 as doubled"
+                },
+                {
+                  "key": "$select",
+                  "value": "title,doubled"
+                }
+              ]
+            },
+            "description": "Вычисленное значение приходит отдельным свойством. Тип задаёт драйвер СУБД: колонки в сущности у выражения нет, приводить не по чему — в MySQL число придёт строкой. Первичный ключ библиотека дописывает в выборку сама (по нему значение находит свою строку) и убирает из ответа: форму ответа задаёт один $select."
+          },
+          "response": []
+        },
+        {
+          "name": "Строковое выражение",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=concat(name, ' (автор)') as label&$select=id,label&$orderby=label asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "concat(name, ' (автор)') as label"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,label"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "label asc"
+                }
+              ]
+            },
+            "description": "В выражении доступны все функции $filter, а не только арифметика."
+          },
+          "response": []
+        },
+        {
+          "name": "Несколько имён сразу",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul 2 as doubled, pages div 2 as half&$filter=doubled gt 400 and half lt 200&$select=title,doubled,half",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul 2 as doubled, pages div 2 as half"
+                },
+                {
+                  "key": "$filter",
+                  "value": "doubled gt 400 and half lt 200"
+                },
+                {
+                  "key": "$select",
+                  "value": "title,doubled,half"
+                }
+              ]
+            },
+            "description": "Имена перечисляются через запятую и работают независимо друг от друга."
+          },
+          "response": []
+        },
+        {
+          "name": "Путь через связь «многие к одному»",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=author/age mul 2 as authorAge&$select=title,authorAge&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "author/age mul 2 as authorAge"
+                },
+                {
+                  "key": "$select",
+                  "value": "title,authorAge"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Связь присоединяется автоматически, как и в $filter. У книги без автора значение — null: LEFT JOIN, а не INNER."
+          },
+          "response": []
+        },
+        {
+          "name": "Имя видно из тела лямбды",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=age mul 5 as threshold&$filter=books/any(b: b/pages gt threshold)&$select=id,name,age",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "age mul 5 as threshold"
+                },
+                {
+                  "key": "$filter",
+                  "value": "books/any(b: b/pages gt threshold)"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name,age"
+                }
+              ]
+            },
+            "description": "Внутри лямбды путь с переменной относится к книге, а имя без переменной — к внешней сущности, значит и к её $compute."
+          },
+          "response": []
+        },
+        {
+          "name": "Вместе с $expand и страницей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=age mul 2 as doubled&$select=id,name,doubled&$expand=books&$orderby=id asc&$top=2&$count=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "age mul 2 as doubled"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name,doubled"
+                },
+                {
+                  "key": "$expand",
+                  "value": "books"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                },
+                {
+                  "key": "$top",
+                  "value": "2"
+                },
+                {
+                  "key": "$count",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "У автора с двумя книгами в плоском результате две строки, а сущность одна: значение находит её по ключу, а не по номеру строки. count при этом считает авторов, а не строки соединения."
+          },
+          "response": []
+        },
+        {
+          "name": "Сортировка по псевдониму вместе со связью и страницей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul -1 as inverted&$orderby=inverted asc&$expand=author&$top=3",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul -1 as inverted"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "inverted asc"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author"
+                },
+                {
+                  "key": "$top",
+                  "value": "3"
+                }
+              ]
+            },
+            "description": "В ORDER BY уходит SQL-псевдоним, а выражение добавляется в SELECT: выражение в сортировке TypeORM читает как имя алиаса и отказывается строить запрос (дефект A-18)."
+          },
+          "response": []
         }
       ]
     },
@@ -1865,6 +2241,93 @@
               ]
             },
             "description": "Разбор строки в число проваливается на любом нечисловом значении. По спецификации неудачное приведение обязано дать null, а в SQL оно даёт ошибку уровня СУБД (PostgreSQL), ноль с предупреждением (MySQL) или 0.0 (SQLite); портируемого TRY_CAST нет. Ответ — 400 с названием пары типов, а не молча неверная выборка."
+          },
+          "response": []
+        },
+        {
+          "name": "Имя $compute занято свойством — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=age mul 2 as name&$filter=name eq 'Ada'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "age mul 2 as name"
+                },
+                {
+                  "key": "$filter",
+                  "value": "name eq 'Ada'"
+                }
+              ]
+            },
+            "description": "По спецификации совпадение имени со свойством сущности — ошибка, а не переопределение: молча выигранное имя означало бы фильтр не по той колонке."
+          },
+          "response": []
+        },
+        {
+          "name": "Выражение $compute через связь «ко многим» в $select — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=books/pages mul 2 as p&$select=id,p",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "books/pages mul 2 as p"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,p"
+                }
+              ]
+            },
+            "description": "Значение считалось бы по каждой книге, и одного значения на автора у него не существует. В $filter тот же путь допустим — там это обычное условие по соединённой связи."
+          },
+          "response": []
+        },
+        {
+          "name": "Псевдоним $compute во вложенном $select — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($compute=pages mul 2 as d;$select=title,d)&$select=id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($compute=pages mul 2 as d;$select=title,d)"
+                },
+                {
+                  "key": "$select",
+                  "value": "id"
+                }
+              ]
+            },
+            "description": "Вычисленные значения материализуются только для корня. Псевдоним во вложенном $select не доехал бы до ответа, поэтому запрос отвергается, а не выполняется частично."
           },
           "response": []
         }

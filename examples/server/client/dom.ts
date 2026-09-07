@@ -25,6 +25,11 @@ export const form = {
   filter: byId<HTMLTextAreaElement>('filter'),
   select: byId<HTMLInputElement>('select'),
   expand: byId<HTMLInputElement>('expand'),
+  /**
+   * `$compute`: выражение под именем. Обычное текстовое поле без подсказок по схеме —
+   * имя справа от `as` придумывает пользователь, и предложить его страница не может.
+   */
+  compute: byId<HTMLInputElement>('compute'),
   orderby: byId<HTMLInputElement>('orderby'),
   /**
    * Направление сортировки отдельным списком: в `$orderby` оно записывается словом
@@ -44,6 +49,7 @@ export const TEXT_FIELDS = [
   'filter',
   'select',
   'expand',
+  'compute',
   'orderby',
   'top',
   'skip',

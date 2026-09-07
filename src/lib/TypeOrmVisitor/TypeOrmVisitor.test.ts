@@ -1,4 +1,4 @@
-import { ODataUnsupportedError } from '../errors';
+import { ODataInvalidQueryError, ODataUnsupportedError } from '../errors';
 import { parseQueryOptions, type Token, TokenType } from '../odataParser';
 import type { ColumnTypeResolver, RelationResolver, RelationSource, SqlOptions } from '../types';
 import { TypeOrmVisitor } from './TypeOrmVisitor';
@@ -865,6 +865,133 @@ describe('TypeOrmVisitor', () => {
 
       expect(sql).not.toContain('OFFSET');
       expect(sql).not.toContain('FETCH');
+    });
+  });
+
+  describe('$compute', () => {
+    /** Псевдоним и его SQL — то, ради чего опция и существует. */
+    function compute(odataQuery: string, options: Partial<SqlOptions> = {}): TypeOrmVisitor {
+      const visitor = new TypeOrmVisitor({ alias: 'u', useParameters: true, ...options });
+
+      visitor.Visit(parseQueryOptions(odataQuery));
+
+      return visitor;
+    }
+
+    it('имя подставляется скомпилированным SQL в $filter', () => {
+      const { sql, parameters } = processQuery(
+        '$compute=age mul 2 as doubled&$filter=doubled gt 80'
+      );
+
+      expect(sql).toContain('(u.age * :p0) > :p1');
+      // :p0 — литерал из $compute: он компилируется раньше $filter, поэтому номер первый.
+      expect(parameters.get('p0')).toBe(2);
+      expect(parameters.get('p1')).toBe(80);
+    });
+
+    it('имя работает и в $orderby', () => {
+      // Разбор $compute обязан идти раньше $orderby, иначе имя не нашлось бы —
+      // см. queryOptionsSort.
+      //
+      // В сортировку уходит SQL-псевдоним, а не выражение: выражение в ORDER BY ломает
+      // двухшаговую пагинацию TypeORM — он читает `(u.age * :p0)` как алиас `(u`.
+      const visitor = compute('$compute=age mul 2 as doubled&$orderby=doubled desc');
+
+      expect(visitor.orderby).toBe('u_doubled DESC');
+      expect(visitor.computedOrderBy.get('doubled')).toBe('(u.age * :p0)');
+      expect(visitor.computedOrderByAlias('doubled')).toBe('u_doubled');
+    });
+
+    it('в $filter подставляется выражение, а не псевдоним', () => {
+      // В WHERE ссылаться на псевдоним из SELECT нельзя — там нужно само выражение.
+      const visitor = compute('$compute=age mul 2 as doubled&$filter=doubled gt 8');
+
+      expect(visitor.where).toContain('(u.age * :p0) >');
+      expect(visitor.computedOrderBy.size).toBe(0);
+    });
+
+    it('одно и то же имя в двух местах компилируется один раз', () => {
+      // Выражение компилируется при разборе $compute, поэтому параметр в нём один,
+      // а не по одному на каждое употребление.
+      const { parameters } = processQuery(
+        '$compute=age add 1 as next&$filter=next gt 10 and next lt 20'
+      );
+
+      expect([...parameters.values()]).toEqual([1, 10, 20]);
+    });
+
+    it('имя в $select уходит в computedSelects, а не в список колонок', () => {
+      const visitor = compute('$compute=age mul 2 as doubled&$select=id,doubled');
+
+      expect(visitor.select).toBe('u.id');
+      expect(visitor.computedSelects).toEqual([{ name: 'doubled', sql: '(u.age * :p0)' }]);
+    });
+
+    it('$select только из псевдонимов оставляет select пустым', () => {
+      // Слой выполнения отличает этот случай по паре «computedSelects не пуст,
+      // select равен умолчанию» и выбирает первичный ключ.
+      const visitor = compute('$compute=age mul 2 as doubled&$select=doubled');
+
+      expect(visitor.select).toBe('*');
+      expect(visitor.computedSelects.map((item) => item.name)).toEqual(['doubled']);
+    });
+
+    it('поля внутри выражения попадают в белый список, а имя псевдонима — нет', () => {
+      // Иначе $compute стал бы обходом проверки allowedFields (R-11).
+      const visitor = compute('$compute=age mul 2 as doubled&$filter=doubled gt 8');
+
+      expect(visitor.collectReferencedFields()).toEqual(['age']);
+      expect(visitor.computedFields.get('doubled')).toEqual(['age']);
+    });
+
+    it('выражение компилируется, даже если им никто не воспользовался', () => {
+      // Ошибка в неиспользованном выражении иначе прошла бы незамеченной, а поля
+      // внутри — мимо белого списка.
+      const visitor = compute('$compute=age mul 2 as doubled&$select=id');
+
+      expect(visitor.computed.get('doubled')).toBe('(u.age * :p0)');
+      expect(visitor.collectReferencedFields()).toContain('age');
+    });
+
+    it('путь через связь создаёт JOIN, как и в $filter', () => {
+      const visitor = compute('$compute=profile/height mul 2 as h&$filter=h gt 100');
+
+      expect(visitor.where).toContain('(u_profile.height * :p0)');
+      expect(visitor.includes.map((include) => include.navigationProperty)).toEqual(['profile']);
+    });
+
+    it('псевдоним виден из тела лямбды', () => {
+      const { sql } = processQuery(
+        '$compute=age mul 10 as limit&$filter=books/any(b: b/pages gt limit)',
+        {
+          resolveRelation: relationResolver(['books']),
+        }
+      );
+
+      expect(sql).toContain('(u.age * :p0)');
+    });
+
+    it('столкновение с именем свойства сущности отвергается', () => {
+      // Молча выигранное имя означало бы фильтр не по той колонке.
+      expect(() =>
+        compute('$compute=age mul 2 as name&$select=name', { resolveColumnType })
+      ).toThrow(ODataInvalidQueryError);
+    });
+
+    it('без resolveColumnType столкновение не проверяется', () => {
+      // Прямой вызов createFilter без метаданных: спросить состав сущности не у кого.
+      expect(() => compute('$compute=age mul 2 as name&$select=name')).not.toThrow();
+    });
+
+    it('повторное имя отвергается', () => {
+      expect(() => compute('$compute=age as x, age add 1 as x')).toThrow(ODataInvalidQueryError);
+    });
+
+    it('вложенный $compute действует в своей области', () => {
+      const visitor = compute('$expand=books($compute=pages mul 2 as p;$filter=p gt 100)');
+
+      expect(visitor.computed.size).toBe(0);
+      expect(visitor.includes[0]?.where).toContain('(u_books.pages * :p0) >');
     });
   });
 

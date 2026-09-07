@@ -72,7 +72,7 @@ yarn server
 Там же отдаётся схема сервиса: <http://localhost:3001/api/$metadata> — готовый документ
 CSDL XML, который можно скормить клиенту OData как есть.
 
-Там же лежит коллекция Postman на 70 запросов: [examples/postman/](./examples/postman/).
+Там же лежит коллекция Postman на 84 запроса: [examples/postman/](./examples/postman/).
 
 ## Быстрый старт
 
@@ -145,6 +145,7 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc&\$count=true"
 | `$count` | ✅ | `$count=true` — по умолчанию выключен, ответ тогда обычный массив |
 | `$expand` | ✅ | `$expand=posts($select=id,title;$top=2)` — вложенная страница вырезается в SQL оконной функцией |
 | `$search` | ✅ | `$search=(ada OR grace) NOT "computer science"` — грамматика OData целиком |
+| `$compute` | ✅ | `$compute=price mul qty as total&$orderby=total desc` — имя выражения работает в `$filter`, `$orderby` и `$select` |
 
 В `$filter` поддержаны все операторы сравнения, логика (`and` / `or` / `not` / скобки),
 оператор `in`, лямбды `any` / `all` по связям, арифметика (`add`, `sub`, `mul`, `div`, `mod`,
@@ -162,7 +163,7 @@ SQL для функций подбирается под вашу СУБД авт
 [Схема сервиса](#схема-сервиса-metadata-в-xml).
 
 **Не поддерживаются:** `isof`, `totaloffsetminutes`, геопространственные функции, `$apply`,
-`$compute`, `$levels`, `$skiptoken`, `$format`.
+`$levels`, `$skiptoken`, `$format`.
 Такой запрос не выполняется молча — он отвергается ошибкой: `ODataUnsupportedError`, если
 конструкцию принимает грамматика, и `ODataParseError`, если не принимает. Оба класса несут
 признак `isClientError` и отдаются клиенту как `400`.
@@ -481,11 +482,21 @@ try {
 [docs/audit.md](./docs/audit.md).
 
 **Не поддерживается:** `isof`, `totaloffsetminutes`, геопространственные функции, `$apply`,
-`$compute`, `$levels`, `$skiptoken`, `$format`, а также приведения `cast`, которые могут
+`$levels`, `$skiptoken`, `$format`, а также приведения `cast`, которые могут
 провалиться (разбор строки в число, сужение числа). Все эти случаи отвергаются явной ошибкой,
 а не выполняются частично. Причина по каждому пункту — в
 [docs/odata-support.md](./docs/odata-support.md), планы — в
 [docs/roadmap.md](./docs/roadmap.md).
+
+**`$compute` в `$select` не приводит тип значения.** Колонки в сущности у выражения нет,
+преобразовывать не по чему: `pages mul 2` приходит числом в PostgreSQL и SQLite и строкой
+в MySQL. Подробнее — в [docs/odata-support.md](./docs/odata-support.md#compute).
+
+**Вложенный `$orderby` вместе с `$top` корня возвращает меньше строк.**
+`$expand=books($orderby=pages desc)&$top=2` у автора с двумя книгами отдаёт одного автора:
+пагинация TypeORM отсчитывает строки соединения, а не корневые сущности. Затрагивает только
+сортировку связи «ко многим»; подробности и обходной путь —
+в [docs/odata-support.md](./docs/odata-support.md).
 
 **Лямбды `any` / `all` не читают путь через связь внутри тела.** `books/any(b: b/pages gt 100)`
 работает, `books/any(b: b/author/name eq 'Ada')` — нет: это потребовало бы ещё одного

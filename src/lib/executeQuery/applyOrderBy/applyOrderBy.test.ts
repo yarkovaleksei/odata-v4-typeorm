@@ -68,6 +68,30 @@ describe('applyOrderBy', () => {
     expect(apply(',').calls).toEqual([]);
   });
 
+  it('должен отделить направление у выражения с пробелами внутри', () => {
+    // Разбор по первому пробелу отдавал в ORDER BY обрубок 'EXTRACT(YEAR' и направление
+    // 'FROM' — то есть $orderby=year(x) не работал вовсе.
+    expect(apply('EXTRACT(YEAR FROM Author.registeredAt) DESC').calls).toEqual([
+      ['EXTRACT(YEAR FROM Author.registeredAt)', 'DESC'],
+    ]);
+  });
+
+  it('должен считать разделителем только запятую верхнего уровня', () => {
+    // CONCAT(a, b) — одно выражение: запятая внутри скобок к списку сортировки не относится.
+    expect(apply('CONCAT(Author.name, Author.bio) ASC, Author.id DESC').calls).toEqual([
+      ['CONCAT(Author.name, Author.bio)', 'ASC'],
+      ['Author.id', 'DESC'],
+    ]);
+  });
+
+  it('должен нормализовать направление к верхнему регистру', () => {
+    // TypeORM сверяет направление со списком ['ASC', 'DESC'] и на 'asc' бросает TypeORMError.
+    expect(apply('Author.name asc, Author.id desc').calls).toEqual([
+      ['Author.name', 'ASC'],
+      ['Author.id', 'DESC'],
+    ]);
+  });
+
   it('должен вернуть построитель для сцепления вызовов', () => {
     const { result, stub } = apply('Author.name ASC');
 

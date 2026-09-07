@@ -178,6 +178,32 @@ export function generateExamples(
       add('Приведение числа к строке', {
         $filter: `contains(cast(${name},Edm.String),${quote(digit)})`,
       });
+
+      // ── $compute ────────────────────────────────────────────────────────────
+      // Опция даёт выражению имя, поэтому все три примера строятся на одном и том же
+      // `doubled`: разница между ними — только в том, куда это имя подставлено.
+      add('$compute в фильтре', {
+        $compute: `${name} mul 2 as doubled`,
+        $filter: `doubled ge ${threshold * 2}`,
+      });
+      add('$compute в сортировке', {
+        $compute: `${name} mul -1 as inverted`,
+        $orderby: 'inverted asc',
+        $select: [first, name].join(','),
+      });
+      // Тип вычисленного значения задаёт драйвер СУБД: колонки у выражения нет,
+      // приводить не по чему — в MySQL число придёт строкой.
+      add('$compute в ответе', {
+        $compute: `${name} mul 2 as doubled`,
+        $select: [first, name, 'doubled'].join(','),
+      });
+      // Сортировка по псевдониму вместе со страницей: в ORDER BY уходит SQL-псевдоним,
+      // а не выражение, — иначе двухшаговая пагинация TypeORM не строит запрос (A-18).
+      add('$compute в сортировке со страницей', {
+        $compute: `${name} mul -1 as inverted`,
+        $orderby: 'inverted asc',
+        $top: '3',
+      });
     }
   }
 
@@ -279,15 +305,51 @@ export function generateExamples(
     // Лямбды не размножают корневые строки: они разворачиваются в EXISTS, а не в JOIN.
     add('Лямбда any — коллекция непуста', { $filter: `${collection.name}/any()` });
 
+    // Псевдоним во вложенном $select не поддержан: вычисленные значения материализуются
+    // только для корня, и молча потерять его библиотека не вправе.
+    add(
+      '$compute во вложенном $select',
+      {
+        $expand: `${collection.name}($compute=1 add 1 as two;$select=${
+          findRelationTarget(schema, collection)?.fields[0]?.name ?? 'id'
+        },two)`,
+        $select: first,
+      },
+      true
+    );
+
     const targetField = target?.fields.find((field) => kindOf(field) === 'number');
 
     if (targetField) {
+      // Связь присоединяется только ради сортировки и в ответе не появляется. Раньше такой
+      // запрос вместе со страницей не выполнялся вовсе (A-18).
+      add('Сортировка по полю связи со страницей', {
+        $orderby: `${collection.name}/${targetField.name} asc`,
+        $top: '3',
+      });
+
       add('Лямбда any с условием', {
         $filter: `${collection.name}/any(x: x/${targetField.name} ge 0)`,
       });
       add('Лямбда all', {
         $filter: `${collection.name}/all(x: x/${targetField.name} ge 0)`,
       });
+
+      // В $filter путь через связь «ко многим» — обычное условие по соединённой связи,
+      // а в $select у такого выражения нет одного значения на строку: оно считается
+      // по каждой связанной записи. Отсюда пара «работает / отвергается» ниже.
+      add('$compute по связи в фильтре', {
+        $compute: `${collection.name}/${targetField.name} mul 2 as related`,
+        $filter: 'related ge 0',
+      });
+      add(
+        '$compute по связи «ко многим» в $select',
+        {
+          $compute: `${collection.name}/${targetField.name} mul 2 as related`,
+          $select: `${first},related`,
+        },
+        true
+      );
     }
   }
 
@@ -301,6 +363,9 @@ export function generateExamples(
   add('Функция без трансляции', { $filter: 'totaloffsetminutes(id) eq 0' }, true);
   add('Несуществующее поле', { $filter: 'nonexistent eq 1' }, true);
   add('Отрицательный $top', { $top: '-5' }, true);
+  // По спецификации совпадение имени со свойством сущности — ошибка, а не переопределение:
+  // молча выигранное имя означало бы фильтр не по той колонке.
+  add('Имя $compute занято свойством', { $compute: `${first} as ${first}` }, true);
 
   return examples;
 }

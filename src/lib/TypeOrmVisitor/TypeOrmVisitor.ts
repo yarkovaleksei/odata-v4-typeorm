@@ -29,15 +29,21 @@
  */
 
 import { normalizeDialect } from '../dialect';
-import { ODataUnsupportedError } from '../errors';
+import { ODataInvalidQueryError, ODataUnsupportedError } from '../errors';
 import { convertLiteral, literalToSql } from '../literal';
 import { type Token, TokenType } from '../odataParser';
 import type { ColumnTypeResolver, RelationSource, SqlDialect, SqlOptions } from '../types';
 import { VISITOR_DEFAULTS } from './defaults';
 import { dateTimeBound, resolveCast } from './edmCast';
 
-/** Строковые поля посетителя, в которые ветки обхода дописывают SQL. */
-type TargetField = 'where' | 'select' | 'orderby';
+/**
+ * Строковые поля посетителя, в которые ветки обхода дописывают SQL.
+ *
+ * `'compute'` — не поле результата, а черновик: в него компилируется выражение `$compute`,
+ * чтобы затем лечь в таблицу псевдонимов. Отдельная цель нужна потому, что выражение
+ * компилируется теми же ветками обхода, что и `$filter`, а дописывать его в `where` нельзя.
+ */
+type TargetField = 'where' | 'select' | 'orderby' | 'compute';
 
 /**
  * Контекст обхода AST, который передаётся сверху вниз по рекурсии `Visit`.
@@ -110,6 +116,48 @@ export class TypeOrmVisitor {
   public parameters = new Map<string, unknown>();
 
   /**
+   * Псевдонимы `$compute`: имя → скомпилированный SQL выражения.
+   *
+   * Именно таблица имён, а не новая ветка трансляции: `$compute=price mul qty as total` —
+   * это уже умеющееся выражение под именем, и при разрешении идентификатора имя из этой
+   * таблицы подставляется готовым SQL вместо ссылки на колонку.
+   */
+  public readonly computed = new Map<string, string>();
+
+  /**
+   * Псевдонимы `$compute`, названные в `$select`, — в порядке перечисления.
+   *
+   * В `select` они не попадают: там перечисляются колонки сущности, а вычисленное значение
+   * колонкой не является и материализуется отдельно (см. `executeQueryByQueryBuilder`).
+   */
+  public readonly computedSelects: Array<{ name: string; sql: string }> = [];
+
+  /**
+   * Псевдонимы `$compute`, употреблённые в `$orderby`: имя → скомпилированный SQL.
+   *
+   * В `ORDER BY` уходит не само выражение, а SQL-псевдоним (см.
+   * {@link TypeOrmVisitor.computedOrderByAlias}), поэтому выражение нужно ещё и добавить
+   * в `SELECT`. Список для этого и ведётся; заполняет его слой выполнения.
+   *
+   * ПОЧЕМУ НЕ ВЫРАЖЕНИЕ ПРЯМО В `ORDER BY`. При пагинации вместе с соединением TypeORM
+   * выбирает страницу в два приёма и разбирает каждое выражение сортировки как `алиас.колонка`.
+   * Выражение `(Author.age * :p0)` он читает как алиас `(Author` и отказывается строить запрос:
+   * `"(Author" alias was not found`. Ссылка на псевдоним из `SELECT` — та форма, которую
+   * он понимает в обоих режимах.
+   */
+  public readonly computedOrderBy = new Map<string, string>();
+
+  /**
+   * Пути свойств, задействованные каждым выражением `$compute`.
+   *
+   * Отдельно от {@link TypeOrmVisitor.referencedFields}, где они лежат вперемешку с путями
+   * из `$filter` и `$orderby`. Нужны слою выполнения: выражение над путём через связь
+   * «ко многим» в `$select` считается по каждой связанной строке, и одного значения на
+   * сущность у него не существует.
+   */
+  public readonly computedFields = new Map<string, string[]>();
+
+  /**
    * Сквозной счётчик имён параметров.
    *
    * Общий на всё дерево: дочерние посетители забирают его перед обходом и возвращают после,
@@ -155,11 +203,22 @@ export class TypeOrmVisitor {
   public referencedFields: string[] = [];
 
   /**
-   * Порядок разбора верхнеуровневых query options: сначала expand (чтобы появились JOIN-алиасы),
-   * затем filter и select. Опции, не перечисленные здесь, получают indexOf -1 и оказываются «раньше»
-   * в сортировке (то есть обрабатываются перед тремя перечисленными).
+   * Порядок разбора верхнеуровневых query options: сначала `$compute` (чтобы появились имена
+   * псевдонимов), затем expand (чтобы появились JOIN-алиасы), затем filter и select.
+   * Опции, не перечисленные здесь, получают indexOf -1 и оказываются «раньше» в сортировке
+   * (то есть обрабатываются перед перечисленными).
+   *
+   * `$orderby` попал в список только ради `$compute`: без явной позиции он получал бы -1
+   * и разбирался раньше псевдонимов, то есть `$orderby=total` не нашёл бы имени. Относительно
+   * `$expand`, `$filter` и `$select` его место при этом не изменилось.
    */
-  private queryOptionsSort = [TokenType.Expand, TokenType.Filter, TokenType.Select];
+  private queryOptionsSort = [
+    TokenType.Compute,
+    TokenType.OrderBy,
+    TokenType.Expand,
+    TokenType.Filter,
+    TokenType.Select,
+  ];
 
   /**
    * Признак «последним разобранным литералом был `null`».
@@ -172,6 +231,17 @@ export class TypeOrmVisitor {
 
   /** Целевая СУБД: определяет, какие SQL-функции подставлять для функций OData. */
   private readonly dialect: SqlDialect;
+
+  /** Черновик для компиляции одного выражения `$compute`; см. {@link TargetField}. */
+  private computeBuffer = '';
+
+  /**
+   * Псевдонимы `$compute` внешнего уровня, видимые из тела лямбды.
+   *
+   * Парный к {@link TypeOrmVisitor.outerAlias}: имя без переменной лямбды относится
+   * к внешней сущности, а значит и псевдоним искать нужно в её таблице имён.
+   */
+  private outerComputed?: ReadonlyMap<string, string>;
 
   /**
    * Имя переменной лямбды, если этот посетитель компилирует её тело (`books/any(b: …)` → `b`).
@@ -364,6 +434,16 @@ export class TypeOrmVisitor {
     return this.alias ? `${this.alias}.${name}` : name;
   }
 
+  /**
+   * SQL-псевдоним, под которым вычисленное значение попадает в `SELECT` ради сортировки.
+   *
+   * Имя уровня в префиксе разводит одноимённые псевдонимы разных областей: `$compute=x as d`
+   * на корне и такой же внутри `$expand` дали бы в одном `SELECT` два `d`.
+   */
+  public computedOrderByAlias(name: string): string {
+    return this.alias ? `${this.alias}_${name}` : name;
+  }
+
   /** Регистрирует упомянутый путь свойства; повторы отбрасываются. */
   private trackField(path: string): void {
     if (!this.referencedFields.includes(path)) {
@@ -450,6 +530,8 @@ export class TypeOrmVisitor {
         return this.select;
       case 'orderby':
         return this.orderby;
+      case 'compute':
+        return this.computeBuffer;
       default:
         return this.where;
     }
@@ -463,6 +545,9 @@ export class TypeOrmVisitor {
         break;
       case 'orderby':
         this.orderby = sql;
+        break;
+      case 'compute':
+        this.computeBuffer = sql;
         break;
       default:
         this.where = sql;
@@ -504,6 +589,62 @@ export class TypeOrmVisitor {
     context.target = 'select';
 
     node.value.items.forEach((item: Token) => this.Visit(item, context));
+  }
+
+  /**
+   * `$compute`: список выражений с именами.
+   *
+   * Разбирается раньше `$filter`, `$orderby` и `$select` — иначе имя псевдонима не нашлось бы
+   * при разрешении идентификатора (см. {@link TypeOrmVisitor.queryOptionsSort}).
+   */
+  protected VisitCompute(node: Token, context: Context) {
+    node.value.items.forEach((item: Token) => this.Visit(item, context));
+  }
+
+  /**
+   * Один элемент `$compute`: `<выражение> as <имя>`.
+   *
+   * Выражение компилируется сразу и целиком, а результат кладётся в таблицу имён. Отложить
+   * компиляцию до первого употребления нельзя: `$compute` может остаться неиспользованным,
+   * и тогда ошибка в его выражении прошла бы незамеченной, а поля внутри — мимо белого списка.
+   *
+   * ПРО СТОЛКНОВЕНИЕ ИМЁН. Совпадение с именем свойства сущности — ошибка по спецификации,
+   * а не переопределение: молча выигранное имя означало бы фильтр не по той колонке. Ответить
+   * на вопрос «есть ли такое свойство» умеет только `resolveColumnType` (R-44); без него
+   * (прямой вызов `createFilter` без метаданных) проверка не выполняется, как и всё остальное,
+   * что опирается на метаданные.
+   *
+   * @throws {ODataInvalidQueryError} имя занято свойством сущности либо другим псевдонимом.
+   */
+  protected VisitComputeItem(node: Token, context: Context) {
+    const name = node.value.name as string;
+
+    if (this.computed.has(name)) {
+      throw new ODataInvalidQueryError('$compute', `duplicate name: ${name}`);
+    }
+
+    if (this.options.resolveColumnType?.(name) !== undefined) {
+      throw new ODataInvalidQueryError(
+        '$compute',
+        `name collides with a property of the entity: ${name}`
+      );
+    }
+
+    // Поля, упомянутые именно этим выражением: то, что появилось в referencedFields за время
+    // его обхода. Общий список ведётся сквозным, поэтому запоминается его длина до обхода.
+    const fieldsBefore = this.referencedFields.length;
+    const buffer = this.computeBuffer;
+
+    this.computeBuffer = '';
+
+    this.Visit(node.value.expr, { ...context, target: 'compute' });
+
+    const sql = this.computeBuffer;
+
+    this.computeBuffer = buffer;
+
+    this.computed.set(name, sql);
+    this.computedFields.set(name, this.referencedFields.slice(fieldsBefore));
   }
 
   /** `$orderby`: список выражений с направлением. */
@@ -654,6 +795,18 @@ export class TypeOrmVisitor {
    * `$select=books/title` работает и без явного `$expand`.
    */
   protected VisitSelectItem(node: Token, context: Context) {
+    const computed = this.computed.get(node.raw);
+
+    if (computed !== undefined) {
+      // Вычисленное значение колонкой сущности не является: в `select` ему места нет,
+      // материализует его слой выполнения отдельным `addSelect` (R-48).
+      if (!this.computedSelects.some((item) => item.name === node.raw)) {
+        this.computedSelects.push({ name: node.raw, sql: computed });
+      }
+
+      return;
+    }
+
     if (this.select !== '' && !this.select.trim().endsWith(',')) {
       this.select += ', ';
     }
@@ -728,6 +881,18 @@ export class TypeOrmVisitor {
     const segments = node.raw.split('/');
 
     if (segments[0] !== this.lambdaVariable) {
+      const computed = this.outerComputed?.get(node.raw);
+
+      if (computed !== undefined) {
+        // Псевдоним внешнего уровня. Его SQL ссылается на внешний алиас, и внутри
+        // коррелированного подзапроса такая ссылка законна — на ней же держится
+        // само сравнение с внешней сущностью.
+        this.append(context, computed);
+        context.identifier = node.raw;
+
+        return;
+      }
+
       // Имя внешнего уровня: и трекинг, и префикс относятся к нему.
       this.trackField(node.raw);
       this.append(context, this.outerAlias ? `${this.outerAlias}.${node.raw}` : node.raw);
@@ -811,6 +976,28 @@ export class TypeOrmVisitor {
    * {@link TypeOrmVisitor.VisitPropertyPathExpression}.
    */
   protected VisitODataIdentifier(node: Token, context: Context) {
+    const computed = this.computed.get(node.value.name);
+
+    if (computed !== undefined) {
+      // Псевдоним `$compute` — не колонка, а готовый SQL. В `referencedFields` он не попадает
+      // намеренно: белый список обязан проверять пути внутри выражения, а не имя, которое
+      // клиент придумал сам, — иначе `$compute` стал бы обходом проверки из R-11. Пути внутри
+      // уже записаны при компиляции выражения.
+      //
+      // В сортировке вместо выражения пишется SQL-псевдоним: выражение в `ORDER BY` ломает
+      // двухшаговую пагинацию TypeORM — см. {@link TypeOrmVisitor.computedOrderBy}.
+      if (context.target === 'orderby') {
+        this.computedOrderBy.set(node.value.name, computed);
+        this.append(context, this.computedOrderByAlias(node.value.name));
+      } else {
+        this.append(context, computed);
+      }
+
+      context.identifier = node.value.name;
+
+      return;
+    }
+
     this.trackField(node.value.name);
 
     this.append(context, this.qualify(node.value.name));
@@ -1152,6 +1339,9 @@ export class TypeOrmVisitor {
     // разрешил бы их у себя. Замыкание, а не сама функция из опций: этот посетитель может
     // и сам быть телом лямбды, и тогда правило уровнем выше уже другое.
     inner.outerResolveColumnType = (path) => this.resolveTypeOfPath(path);
+    // Псевдонимы `$compute` объявлены на внешнем уровне, и имя без переменной лямбды
+    // относится туда же.
+    inner.outerComputed = this.computed;
     inner.lambdaColumn = source.column;
     inner.parameterSeed = this.parameterSeed;
 

@@ -32,6 +32,8 @@ export enum TokenType {
   Expand = 'Expand',
   ExpandItem = 'ExpandItem',
   ExpandPath = 'ExpandPath',
+  Compute = 'Compute',
+  ComputeItem = 'ComputeItem',
 
   // ── Логика ───────────────────────────────────────────────────────────────
   AndExpression = 'AndExpression',

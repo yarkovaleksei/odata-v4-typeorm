@@ -128,6 +128,40 @@ describe('parseQueryOptions', () => {
     });
   });
 
+  describe('$compute', () => {
+    it('выражение и имя', () => {
+      const items = option('$compute=pages mul 2 as doubled', TokenType.Compute).value.items;
+
+      expect(items).toHaveLength(1);
+      expect(items[0].value.name).toBe('doubled');
+      expect(items[0].value.expr.type).toBe(TokenType.MulExpression);
+    });
+
+    it('несколько выражений через запятую', () => {
+      const items = option(
+        '$compute=pages mul 2 as doubled, concat(title,title) as twice',
+        TokenType.Compute
+      ).value.items;
+
+      expect(items.map((item: Token) => item.value.name)).toEqual(['doubled', 'twice']);
+    });
+
+    it('внутри $expand', () => {
+      const items = option('$expand=books($compute=pages add 1 as p)', TokenType.Expand).value
+        .items;
+
+      expect(items[0].value.options[0].type).toBe(TokenType.Compute);
+    });
+
+    it.each([
+      ['без "as"', '$compute=pages mul 2'],
+      ['без имени', '$compute=pages mul 2 as'],
+      ['имя не идентификатор', "$compute=pages mul 2 as 'x'"],
+    ])('%s — ошибка разбора', (_name, source) => {
+      expect(() => parseQueryOptions(source)).toThrow(ODataParseError);
+    });
+  });
+
   describe('числа и логические значения', () => {
     it('$top и $skip', () => {
       expect(option('$top=25', TokenType.Top).value.raw).toBe('25');

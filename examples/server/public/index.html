@@ -82,6 +82,21 @@
         </div>
 
         <div class="field">
+          <label for="compute">
+            $compute
+            <span class="tag">выражение под именем</span>
+          </label>
+          <input id="compute" spellcheck="false" placeholder="pages mul 2 as doubled" />
+          <p class="hint">
+            Даёт выражению имя, и дальше имя работает как поле — в <code>$filter</code>,
+            <code>$orderby</code> и <code>$select</code>. Справа от <code>as</code> стоит то же
+            выражение, что и в <code>$filter</code>. Несколько имён — через запятую. Названное в
+            <code>$select</code> значение приходит отдельным свойством, а его тип задаёт драйвер
+            СУБД: библиотека не приводит его, потому что колонки у выражения нет.
+          </p>
+        </div>
+
+        <div class="field">
           <label for="orderby">
             $orderby
             <span class="tag">поле и направление</span>

@@ -89,9 +89,9 @@ const total = Array.isArray(result) ? result.length : result.count;
 
 | Ошибка | Причина | HTTP |
 |---|---|---|
-| `ODataParseError` | Синтаксически некорректный OData-параметр; конструкция, которой нет в грамматике (геофункции, JSON-литералы, `$apply`, `$compute`, `$levels`, `$skiptoken`) | `400` |
+| `ODataParseError` | Синтаксически некорректный OData-параметр; конструкция, которой нет в грамматике (геофункции, JSON-литералы, `$apply`, `$levels`, `$skiptoken`) | `400` |
 | `ODataUnsupportedError` | Конструкция, которую грамматика принимает, но транслировать в SQL нельзя (`isof`, `totaloffsetminutes`, приведение `cast`, которое может провалиться, любая неизвестная функция) | `400` |
-| `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка | `400` |
+| `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка; имя `$compute`, занятое свойством сущности или объявленное дважды | `400` |
 | `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются | `400` |
 | `EntityMetadataNotFoundError` | У построителя нет метаданных и `alias` не соответствует сущности | `500` |
 
@@ -380,6 +380,7 @@ interface QueryParams {
   $orderby?: string;
   $select?: string;
   $expand?: string;
+  $compute?: string;
   $top?: string;
   $skip?: string;
   $count?: string;
@@ -391,7 +392,10 @@ interface QueryParams {
 Результат `parseQueryParams`: пагинация и `$count` строго типизированы и всегда определены.
 
 ```ts
-type ParsedQueryParams = Pick<QueryParams, '$search' | '$filter' | '$orderby' | '$select' | '$expand'> & {
+type ParsedQueryParams = Pick<
+  QueryParams,
+  '$search' | '$filter' | '$orderby' | '$select' | '$expand' | '$compute'
+> & {
   $top?: number;   // undefined = «$top не передан»; 0 = «пустая страница»
   $skip: number;
   $count: boolean;

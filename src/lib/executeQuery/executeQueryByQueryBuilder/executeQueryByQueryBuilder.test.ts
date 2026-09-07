@@ -22,7 +22,16 @@ describe('executeQueryByQueryBuilder', () => {
       addOrderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
-      expressionMap: { mainAlias: { name: 'defaultAlias' } },
+      // У настоящего построителя эти поля есть всегда — пустыми, если ничего не задано.
+      // `joinAttributes` показывает, применит ли TypeORM двухшаговую пагинацию, которой
+      // нужен первичный ключ в выборке; по `allOrderBys` и `selects` видно, все ли колонки
+      // сортировки в неё попали.
+      expressionMap: {
+        mainAlias: { name: 'defaultAlias' },
+        joinAttributes: [],
+        allOrderBys: {},
+        selects: [],
+      },
       connection: {
         getMetadata: jest.fn().mockReturnValue({}),
         // options.type читается для выбора диалекта SQL-функций (LENGTH против LEN и т.п.).
