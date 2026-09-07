@@ -42,23 +42,36 @@ function string(value: string): string {
   return decodeURIComponent(value).slice(1, -1).replace(/''/g, "'");
 }
 
-/** Длительность `duration'P1DT2H'` в миллисекундах. */
+/**
+ * Длительность `duration'P1DT2H'` в миллисекундах.
+ *
+ * ЗНАК разбирается отдельной группой. Спецификация (раздел 5.1.1.11.1) разрешает
+ * `duration'-PT1H'`, и без этой группы минус просто не попадал в разбор: длительность
+ * молча становилась положительной. Пока значение только сравнивали с колонкой, ошибка
+ * пряталась за несовпадением; `totalseconds` (R-42) делает её видимой.
+ *
+ * Лет, месяцев и недель здесь нет намеренно: `Edm.Duration` в OData v4 ограничен днями,
+ * часами, минутами и секундами — в отличие от полного ISO 8601.
+ */
 function duration(value: string): number {
-  const match = /P(?:([0-9]+)D)?T?(?:([0-9]{1,2})H)?(?:([0-9]{1,2})M)?(?:([.0-9]+)S)?/.exec(value);
+  const match = /(-?)P(?:([0-9]+)D)?T?(?:([0-9]{1,2})H)?(?:([0-9]{1,2})M)?(?:([.0-9]+)S)?/.exec(
+    value
+  );
 
   if (!match) {
     throw new Error(`Invalid duration literal: ${value}`);
   }
 
-  const [, days, hours, minutes, seconds] = match;
+  const [, sign, days, hours, minutes, seconds] = match;
 
-  return (
+  const total =
     (Number(days ?? 0) * 24 * 60 * 60 +
       Number(hours ?? 0) * 60 * 60 +
       Number(minutes ?? 0) * 60 +
       Number(seconds ?? 0)) *
-    1000
-  );
+    1000;
+
+  return sign === '-' ? -total : total;
 }
 
 /** Таблица соответствий: тип EDM → преобразование исходного текста литерала. */

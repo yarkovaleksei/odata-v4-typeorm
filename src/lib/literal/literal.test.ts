@@ -53,6 +53,18 @@ describe('convertLiteral', () => {
     expect(convertLiteral('Edm.Duration', "duration'PT0.5S'")).toBe(500);
   });
 
+  /**
+   * Знак стоит перед `P` (`duration'-PT1H'`) и раньше в разбор не попадал: отрицательная
+   * длительность молча становилась положительной. `totalseconds` (R-42) делает такую
+   * подмену видимой в результате запроса, а не только в сравнении.
+   */
+  it('отрицательная длительность сохраняет знак', () => {
+    expect(convertLiteral('Edm.Duration', "duration'-PT1H'")).toBe(-60 * 60 * 1000);
+    expect(convertLiteral('Edm.Duration', "duration'-P1DT2H'")).toBe(
+      -(24 * 60 * 60 + 2 * 60 * 60) * 1000
+    );
+  });
+
   it('длительность без буквы P отвергается', () => {
     // Молча вернуть ноль здесь нельзя: `duration'1D'` — опечатка, а не нулевой интервал.
     expect(() => convertLiteral('Edm.Duration', "duration'1D'")).toThrow(

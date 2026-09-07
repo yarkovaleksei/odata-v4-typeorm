@@ -98,6 +98,25 @@ export function generateExamples(
       add('Строковые функции', {
         $filter: `length(${name}) gt 2 and startswith(${name},${quote(String(value).slice(0, 1))})`,
       });
+
+      // Ожидаемая строка считается тем же способом, что и в SQL — заменой ВСЕХ вхождений,
+      // — поэтому пример всегда возвращает ту строку, из которой взят фрагмент.
+      //
+      // Фрагмент берётся коротким, а не первым словом: заменив слово целиком, пример
+      // показал бы `replace(name,'Ada','ADA') eq 'ADA'`, где замену от обычного равенства
+      // не отличить.
+      const fragment = String(value).slice(0, 2);
+
+      if (fragment) {
+        const upper = fragment.toUpperCase();
+
+        add('Замена подстроки', {
+          $filter:
+            `replace(${name},${quote(fragment)},${quote(upper)}) eq ` +
+            `${quote(String(value).replaceAll(fragment, upper))}`,
+        });
+      }
+
       add('Поиск по всем полям ($search)', { $search: fragmentOf(value) });
     }
   }
@@ -141,6 +160,14 @@ export function generateExamples(
 
       add('Сравнение чисел', { $filter: `${name} ge ${threshold}`, $orderby: `${name} asc` });
       add('Арифметика', { $filter: `${name} mul 2 ge ${threshold * 2}` });
+
+      // Сравнение числового поля с длительностью выглядит искусственно, но показать
+      // `totalseconds` иначе не на чем: колонки типа `Edm.Duration` в схеме нет и быть
+      // не может — типа интервала нет ни в SQLite, ни в MySQL. Работает здесь именно
+      // литерал: он сворачивается в число ещё при компиляции, до всякого SQL.
+      add('Длительность в секундах', {
+        $filter: `${name} le totalseconds(duration'PT${threshold}S')`,
+      });
     }
   }
 
@@ -158,6 +185,12 @@ export function generateExamples(
 
     if (Number.isFinite(year)) {
       add('Функции даты', { $filter: `year(${dateField.name}) eq ${year}` });
+
+      // Условие `lt 1` выполняется для любой непустой даты: дробная часть секунд по
+      // определению лежит в [0, 1). У колонки, объявленной без дробной части, значение
+      // всегда нулевое — сравнение с нулём показывало бы не работу функции, а точность
+      // хранилища.
+      add('Дробная часть секунд', { $filter: `fractionalseconds(${dateField.name}) lt 1` });
     }
   }
 
@@ -245,7 +278,10 @@ export function generateExamples(
   // Библиотека никогда не выполняет запрос частично: непереводимая конструкция,
   // несуществующее поле и недопустимое значение параметра дают 400, а не тихую подмену
   // результата. Ради этого примеры-отказы и держатся на видном месте.
-  add('Функция без трансляции', { $filter: 'fractionalseconds(id) eq 1' }, true);
+  // Смещение часового пояса не хранится, восстанавливать его не из чего — трансляции
+  // у функции нет и не будет. Пример потому и выбран: он не устареет от того, что
+  // перечень поддержанных функций пополнится.
+  add('Функция без трансляции', { $filter: 'totaloffsetminutes(id) eq 0' }, true);
   add('Несуществующее поле', { $filter: 'nonexistent eq 1' }, true);
   add('Отрицательный $top', { $top: '-5' }, true);
 

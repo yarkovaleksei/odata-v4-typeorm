@@ -257,8 +257,11 @@ describe('классификация ошибок', () => {
     ['синтаксис', { $filter: '!!!' }, ODataParseError],
     ['неподдерживаемая функция', { $filter: 'geo.distance(a,b) lt 1' }, ODataUnsupportedError],
     [
+      // Смещение часового пояса не хранится (колонка приводит момент к UTC), поэтому
+      // трансляции у функции нет и не будет — пример останется верным и после того,
+      // как перечень поддержанных функций пополнится.
       'функция без трансляции',
-      { $filter: 'fractionalseconds(registeredAt) eq 1' },
+      { $filter: 'totaloffsetminutes(registeredAt) eq 0' },
       ODataUnsupportedError,
     ],
     ['отрицательный $top', { $top: '-1' }, ODataInvalidQueryError],

@@ -913,6 +913,31 @@
           "response": []
         },
         {
+          "name": "replace",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=replace(bio,' ','_') eq 'Pioneer_of_computing'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "replace(bio,' ','_') eq 'Pioneer_of_computing'"
+                }
+              ]
+            },
+            "description": "Заменяются все вхождения, а не первое. Единственная строковая функция OData без диалектных расхождений: REPLACE с той же сигнатурой есть во всех пяти СУБД."
+          },
+          "response": []
+        },
+        {
           "name": "indexof",
           "request": {
             "method": "GET",
@@ -1013,6 +1038,60 @@
               ]
             },
             "description": "Тип time есть только у выходных данных книги."
+          },
+          "response": []
+        },
+        {
+          "name": "fractionalseconds",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=fractionalseconds(registeredAt) lt 1&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "fractionalseconds(registeredAt) lt 1"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Дробная часть секунд лежит в диапазоне [0, 1), поэтому условие выполняется для любой непустой даты. У колонки, объявленной без дробной части, значение всегда нулевое — это отсутствие данных в хранилище, а не свойство трансляции. Форма SQL разная в каждой СУБД: EXTRACT, MICROSECOND, strftime, DATEPART."
+          },
+          "response": []
+        },
+        {
+          "name": "totalseconds",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=age lt totalseconds(duration'PT40S')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "age lt totalseconds(duration'PT40S')"
+                }
+              ]
+            },
+            "description": "Литерал длительности сворачивается в число ещё при компиляции, поэтому функция работает и в СУБД без типа интервала. Над колонкой она требует типа длительности и доступна только в PostgreSQL и Oracle."
           },
           "response": []
         }
@@ -1562,7 +1641,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/authors?$filter=fractionalseconds(registeredAt) eq 1",
+              "raw": "{{base_url}}/api/authors?$filter=totaloffsetminutes(registeredAt) eq 0",
               "host": [
                 "{{base_url}}"
               ],
@@ -1573,11 +1652,11 @@
               "query": [
                 {
                   "key": "$filter",
-                  "value": "fractionalseconds(registeredAt) eq 1"
+                  "value": "totaloffsetminutes(registeredAt) eq 0"
                 }
               ]
             },
-            "description": "Функция разобрана, но SQL для неё нет: запрос отвергается, а не выполняется частично."
+            "description": "Функция разобрана, но SQL для неё нет: смещение часового пояса не хранится, восстанавливать его не из чего. Запрос отвергается, а не выполняется частично."
           },
           "response": []
         },

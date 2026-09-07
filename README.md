@@ -150,8 +150,9 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc&\$count=true"
 оператор `in`, лямбды `any` / `all` по связям, арифметика (`add`, `sub`, `mul`, `div`, `mod`,
 унарный минус), `null` → `IS NULL`,
 пути по связям (`author/name`) и функции: `contains`, `startswith`, `endswith`, `tolower`,
-`toupper`, `trim`, `length`, `indexof`, `substring`, `concat`, `round`, `floor`, `ceiling`,
-`year` / `month` / `day` / `hour` / `minute` / `second`, `date`, `time`, `now`.
+`toupper`, `trim`, `length`, `indexof`, `substring`, `concat`, `replace`, `round`, `floor`,
+`ceiling`, `year` / `month` / `day` / `hour` / `minute` / `second`, `fractionalseconds`,
+`date`, `time`, `now`, `totalseconds`.
 
 SQL для функций подбирается под вашу СУБД автоматически (`LENGTH` против `LEN`,
 `EXTRACT` против `strftime` и т.д.) — диалект берётся из подключения TypeORM.
@@ -160,10 +161,14 @@ SQL для функций подбирается под вашу СУБД авт
 тот самый, который разбирают `ra-data-odata-server`, `@odata/client` и Excel:
 [Схема сервиса](#схема-сервиса-metadata-в-xml).
 
-**Не поддерживаются:** `replace`, `cast`, `isof`,
-`mindatetime` / `maxdatetime`, `totalseconds`, геопространственные функции, `$apply`,
-`$compute`, `$levels`, `$skiptoken`. Такой запрос не выполняется молча — он отвергается
-с `ODataUnsupportedError`.
+**Не поддерживаются:** `cast`, `isof`, `mindatetime` / `maxdatetime`, `totaloffsetminutes`,
+геопространственные функции, `$apply`, `$compute`, `$levels`, `$skiptoken`, `$format`.
+Такой запрос не выполняется молча — он отвергается ошибкой: `ODataUnsupportedError`, если
+конструкцию принимает грамматика, и `ODataParseError`, если не принимает. Оба класса несут
+признак `isClientError` и отдаются клиенту как `400`.
+
+`totalseconds` над колонкой требует типа длительности в СУБД и потому работает только
+в PostgreSQL и Oracle; над литералом (`totalseconds(duration'PT1H')`) — везде.
 
 Полная матрица с проверенным поведением каждого оператора и каждой функции, включая таблицу
 генерируемого SQL по диалектам: **[docs/odata-support.md](./docs/odata-support.md)**.
@@ -470,9 +475,11 @@ try {
 Перед внедрением стоит знать. Полный разбор с воспроизведением — в
 [docs/audit.md](./docs/audit.md).
 
-**Не поддерживается:** `replace`, `cast`, `isof`, геопространственные функции, `$apply`,
-`$compute`, `$levels`, `$skiptoken`. Все эти случаи отвергаются явной ошибкой, а не
-выполняются частично.
+**Не поддерживается:** `cast`, `isof`, `totaloffsetminutes`, `mindatetime` / `maxdatetime`,
+геопространственные функции, `$apply`, `$compute`, `$levels`, `$skiptoken`, `$format`.
+Все эти случаи отвергаются явной ошибкой, а не выполняются частично. Причина по каждому
+пункту — в [docs/odata-support.md](./docs/odata-support.md), планы — в
+[docs/roadmap.md](./docs/roadmap.md).
 
 **Лямбды `any` / `all` не читают путь через связь внутри тела.** `books/any(b: b/pages gt 100)`
 работает, `books/any(b: b/author/name eq 'Ada')` — нет: это потребовало бы ещё одного

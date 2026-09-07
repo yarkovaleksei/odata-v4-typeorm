@@ -222,6 +222,77 @@ describe('TypeOrmVisitor', () => {
       });
     });
 
+    describe('replace', () => {
+      it('должен сгенерировать REPLACE с тремя аргументами', () => {
+        const { sql, parameters } = processQuery("$filter=replace(name, 'o', '0') eq 'J0hn'");
+
+        expect(sql).toContain('WHERE REPLACE(u.name, :p0, :p1) = :p2');
+        expect(parameters.get('p0')).toBe('o');
+        expect(parameters.get('p1')).toBe('0');
+      });
+
+      it('форма одинакова во всех диалектах', () => {
+        // Единственная строковая функция OData без диалектных расхождений: сигнатура
+        // REPLACE совпадает во всех пяти СУБД, поэтому switch по диалекту здесь не нужен.
+        for (const dialect of ['ansi', 'postgres', 'mysql', 'sqlite', 'mssql', 'oracle']) {
+          const { sql } = processQuery("$filter=replace(name, 'o', '0') eq 'J0hn'", { dialect });
+
+          expect(sql).toContain('REPLACE(u.name, :p0, :p1)');
+        }
+      });
+
+      it('без третьего аргумента запрос отвергается', () => {
+        // Иначе в SQL уехал бы REPLACE с двумя аргументами — синтаксическая ошибка,
+        // о которой клиент узнал бы уже от СУБД.
+        expect(() => processQuery("$filter=replace(name, 'o') eq 'x'")).toThrow(
+          ODataUnsupportedError
+        );
+      });
+    });
+
+    describe('totalseconds', () => {
+      it('литерал длительности сворачивается в число при компиляции', () => {
+        const { sql, parameters } = processQuery("$filter=totalseconds(duration'PT1H') eq 3600");
+
+        // SQL-функции здесь нет вовсе: значение известно до запроса, поэтому выражение
+        // работает и в СУБД без типа длительности.
+        expect(sql).toContain('WHERE :p0 = :p1');
+        expect(parameters.get('p0')).toBe(3600);
+      });
+
+      it('отрицательная длительность сохраняет знак', () => {
+        const { parameters } = processQuery("$filter=totalseconds(duration'-PT1H') eq -3600");
+
+        expect(parameters.get('p0')).toBe(-3600);
+      });
+
+      it('колонка в PostgreSQL даёт EXTRACT(EPOCH)', () => {
+        const { sql } = processQuery('$filter=totalseconds(span) gt 60', { dialect: 'postgres' });
+
+        expect(sql).toContain('WHERE EXTRACT(EPOCH FROM u.span) > :p0');
+      });
+
+      it('колонка в Oracle складывается из составляющих интервала', () => {
+        const { sql } = processQuery('$filter=totalseconds(span) gt 60', { dialect: 'oracle' });
+
+        expect(sql).toContain(
+          '(EXTRACT(DAY FROM u.span) * 86400 + EXTRACT(HOUR FROM u.span) * 3600 + ' +
+            'EXTRACT(MINUTE FROM u.span) * 60 + EXTRACT(SECOND FROM u.span))'
+        );
+      });
+
+      it.each(['mysql', 'sqlite', 'mssql', 'ansi'])(
+        'колонка в диалекте %s не поддерживается',
+        (dialect) => {
+          // Типа длительности в этих СУБД нет вовсе, значит и колонки Edm.Duration не бывает.
+          // Отказ честнее выдуманной трансляции: считать секунды не из чего.
+          expect(() => processQuery('$filter=totalseconds(span) gt 60', { dialect })).toThrow(
+            ODataUnsupportedError
+          );
+        }
+      );
+    });
+
     describe('round', () => {
       it('должен сгенерировать ROUND', () => {
         const { sql } = processQuery('$filter=round(price) eq 10');
@@ -306,6 +377,22 @@ describe('TypeOrmVisitor', () => {
       ['sqlite', "CAST(strftime('%Y', u.createdAt) AS INTEGER)"],
     ])('year в диалекте %s', (dialect, expected) => {
       const { sql } = processQuery('$filter=year(createdAt) eq 2023', { dialect });
+
+      expect(sql).toContain(expected);
+    });
+
+    it.each([
+      ['ansi', '(EXTRACT(SECOND FROM u.createdAt) - FLOOR(EXTRACT(SECOND FROM u.createdAt)))'],
+      ['postgres', '(EXTRACT(SECOND FROM u.createdAt) - FLOOR(EXTRACT(SECOND FROM u.createdAt)))'],
+      ['oracle', '(EXTRACT(SECOND FROM u.createdAt) - FLOOR(EXTRACT(SECOND FROM u.createdAt)))'],
+      ['mysql', '(MICROSECOND(u.createdAt) / 1000000)'],
+      [
+        'sqlite',
+        "(CAST(strftime('%f', u.createdAt) AS REAL) - CAST(strftime('%S', u.createdAt) AS INTEGER))",
+      ],
+      ['mssql', '(DATEPART(nanosecond, u.createdAt) / 1000000000.0)'],
+    ])('fractionalseconds в диалекте %s', (dialect, expected) => {
+      const { sql } = processQuery('$filter=fractionalseconds(createdAt) eq 0', { dialect });
 
       expect(sql).toContain(expected);
     });

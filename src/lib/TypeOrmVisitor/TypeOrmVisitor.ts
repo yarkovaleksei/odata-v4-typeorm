@@ -1204,6 +1204,10 @@ export class TypeOrmVisitor {
         this.append(context, ')');
         break;
 
+      case 'replace':
+        this.visitReplace(params, context);
+        break;
+
       case 'year':
       case 'month':
       case 'day':
@@ -1211,6 +1215,14 @@ export class TypeOrmVisitor {
       case 'minute':
       case 'second':
         this.visitDatePart(method, params, context);
+        break;
+
+      case 'fractionalseconds':
+        this.visitFractionalSeconds(params, context);
+        break;
+
+      case 'totalseconds':
+        this.visitTotalSeconds(params, context);
         break;
 
       case 'date':
@@ -1311,6 +1323,168 @@ export class TypeOrmVisitor {
     }
 
     this.append(context, ')');
+  }
+
+  /**
+   * Замена подстроки: `replace(строка, что, чем)`.
+   *
+   * Единственная строковая функция OData, у которой нет диалектных расхождений вовсе:
+   * `REPLACE` с той же сигнатурой есть в PostgreSQL, MySQL, SQLite, MS SQL и Oracle.
+   * Поведение с `NULL` тоже общее — `NULL` в любом аргументе даёт `NULL`, то есть ровно
+   * трёхзначную логику SQL, которую библиотека не переопределяет и в остальных местах.
+   */
+  private visitReplace(params: Token[], context: Context) {
+    this.append(context, 'REPLACE(');
+    this.Visit(argumentAt(params, 0, 'replace'), context);
+    this.append(context, ', ');
+    this.Visit(argumentAt(params, 1, 'replace'), context);
+    this.append(context, ', ');
+    this.Visit(argumentAt(params, 2, 'replace'), context);
+    this.append(context, ')');
+  }
+
+  /**
+   * Дробная часть секунд: `fractionalseconds(x)` — значение в диапазоне `[0, 1)`.
+   *
+   * Единой формы нет, как и у `year` / `month` / `day`:
+   * - `EXTRACT(SECOND FROM x)` в PostgreSQL и Oracle возвращает секунды вместе с дробной
+   *   частью, поэтому целую часть приходится вычитать;
+   * - MySQL отдаёт микросекунды отдельной функцией;
+   * - SQLite не умеет `EXTRACT`, а `strftime('%f')` возвращает строку `SS.SSS`;
+   * - MS SQL считает наносекунды целым числом, поэтому делитель записан дробным —
+   *   иначе целочисленное деление дало бы ноль на любом значении.
+   *
+   * У колонки объявленной точности `0` (`timestamp(0)`, `DATETIME` без дробной части)
+   * результат всегда нулевой. Это не свойство трансляции, а отсутствие данных в хранилище.
+   *
+   * Аргумент обходится дважды в двух ветках из четырёх. Для колонки это ничего не стоит,
+   * а для литерала расходует лишний номер параметра — так же, как `substring` в MS SQL,
+   * где длина строки считается тем же способом.
+   */
+  private visitFractionalSeconds(params: Token[], context: Context) {
+    const value = argumentAt(params, 0, 'fractionalseconds');
+
+    if (this.dialect === 'mysql') {
+      this.append(context, '(MICROSECOND(');
+      this.Visit(value, context);
+      this.append(context, ') / 1000000)');
+
+      return;
+    }
+
+    if (this.dialect === 'sqlite') {
+      this.append(context, "(CAST(strftime('%f', ");
+      this.Visit(value, context);
+      this.append(context, ") AS REAL) - CAST(strftime('%S', ");
+      this.Visit(value, context);
+      this.append(context, ') AS INTEGER))');
+
+      return;
+    }
+
+    if (this.dialect === 'mssql') {
+      this.append(context, '(DATEPART(nanosecond, ');
+      this.Visit(value, context);
+      this.append(context, ') / 1000000000.0)');
+
+      return;
+    }
+
+    this.append(context, '(EXTRACT(SECOND FROM ');
+    this.Visit(value, context);
+    this.append(context, ') - FLOOR(EXTRACT(SECOND FROM ');
+    this.Visit(value, context);
+    this.append(context, ')))');
+  }
+
+  /**
+   * Длительность в секундах: `totalseconds(x)`.
+   *
+   * ЛИТЕРАЛ сворачивается в число прямо при компиляции: `duration'PT1H'` — это значение,
+   * известное до запроса, и SQL-функция для него не нужна ни в одном диалекте. Поэтому
+   * `totalseconds(duration'…')` работает везде, включая СУБД без типа длительности.
+   *
+   * КОЛОНКА требует, чтобы тип длительности в СУБД существовал. Он есть только
+   * в PostgreSQL (`interval`) и Oracle (`INTERVAL DAY TO SECOND`) — им и соответствует
+   * единственный тип `Edm.Duration` в таблице `edmType`. В MySQL, SQLite и MS SQL такого
+   * типа нет вовсе: колонки `Edm.Duration` там не бывает, и поддерживать нечего.
+   *
+   * @throws {ODataUnsupportedError} для колонки в диалекте без типа длительности.
+   */
+  private visitTotalSeconds(params: Token[], context: Context) {
+    const value = argumentAt(params, 0, 'totalseconds');
+
+    if (value.type === TokenType.Literal && value.value === 'Edm.Duration') {
+      // convertLiteral отдаёт миллисекунды — единица `Edm.Duration` внутри библиотеки.
+      const milliseconds = convertLiteral(value.value, value.raw) as number;
+
+      this.appendNumber(context, milliseconds / 1000);
+
+      return;
+    }
+
+    if (this.dialect === 'postgres') {
+      this.append(context, 'EXTRACT(EPOCH FROM ');
+      this.Visit(value, context);
+      this.append(context, ')');
+
+      return;
+    }
+
+    if (this.dialect === 'oracle') {
+      // `EXTRACT(EPOCH …)` в Oracle нет, а `EXTRACT` над интервалом даёт составляющие
+      // по отдельности — их и складываем.
+      const parts: ReadonlyArray<readonly [string, number]> = [
+        ['DAY', 86400],
+        ['HOUR', 3600],
+        ['MINUTE', 60],
+        ['SECOND', 1],
+      ];
+
+      this.append(context, '(');
+
+      parts.forEach(([part, multiplier], index) => {
+        if (index > 0) {
+          this.append(context, ' + ');
+        }
+
+        this.append(context, `EXTRACT(${part} FROM `);
+        this.Visit(value, context);
+        this.append(context, multiplier === 1 ? ')' : `) * ${multiplier}`);
+      });
+
+      this.append(context, ')');
+
+      return;
+    }
+
+    throw new ODataUnsupportedError(
+      `totalseconds() over a column in dialect "${this.dialect}"`,
+      value.raw
+    );
+  }
+
+  /**
+   * Дописывает число, вычисленное самой библиотекой, соблюдая режим параметров.
+   *
+   * Значение не приходит из запроса дословно (это результат свёртки литерала), но путь
+   * до SQL у него общий с обычными литералами: при `useParameters` в текст уходит `:pN`.
+   * Так номера параметров остаются сквозными, а форма SQL — одинаковой независимо от того,
+   * что стояло в запросе.
+   */
+  private appendNumber(context: Context, value: number) {
+    if (this.options.useParameters) {
+      const name = `p${this.parameterSeed++}`;
+
+      this.parameters.set(name, value);
+      context.literal = value;
+      this.append(context, `:${name}`);
+
+      return;
+    }
+
+    context.literal = value;
+    this.append(context, String(value));
   }
 
   /**

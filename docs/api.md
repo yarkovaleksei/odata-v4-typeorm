@@ -89,8 +89,8 @@ const total = Array.isArray(result) ? result.length : result.count;
 
 | Ошибка | Причина | HTTP |
 |---|---|---|
-| `ODataParseError` | Синтаксически некорректный OData-параметр | `400` |
-| `ODataUnsupportedError` | Конструкция вне поддерживаемого подмножества (`replace`, `cast`, `isof`, геофункции, `$apply`) | `400` |
+| `ODataParseError` | Синтаксически некорректный OData-параметр; конструкция, которой нет в грамматике (`cast`, `isof`, геофункции, `$apply`, `$compute`, `$levels`, `$skiptoken`) | `400` |
+| `ODataUnsupportedError` | Конструкция, которую грамматика принимает, но транслировать в SQL нельзя (`mindatetime`, `totaloffsetminutes`, любая неизвестная функция) | `400` |
 | `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка | `400` |
 | `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются | `400` |
 | `EntityMetadataNotFoundError` | У построителя нет метаданных и `alias` не соответствует сущности | `500` |
