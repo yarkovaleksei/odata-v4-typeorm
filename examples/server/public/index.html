@@ -5,15 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Конструктор OData-запросов</title>
     <link rel="stylesheet" href="./styles.css" />
+    <!--
+      Выбранная тема применяется до первой отрисовки: модуль со скриптами грузится
+      отложенно, и страница успевала бы мигнуть системной темой. Здесь только это,
+      всё остальное — в theme.ts.
+    -->
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('theme');
+
+        if (savedTheme) {
+          document.documentElement.dataset.theme = savedTheme;
+        }
+      } catch {
+        // Хранилище недоступно (приватный режим, запрет на данные сайтов) — тема останется системной.
+      }
+    </script>
   </head>
   <body>
     <header class="page-header">
-      <h1>Конструктор OData-запросов</h1>
-      <p class="subtitle">
-        Соберите запрос полями формы, посмотрите на получившийся URL и выполните его. Данные живые —
-        их отдаёт
-        <code>odata-v4-typeorm-improved</code> поверх TypeORM и SQLite.
-      </p>
+      <div>
+        <h1>Конструктор OData-запросов</h1>
+        <p class="subtitle">
+          Соберите запрос полями формы, посмотрите на получившийся URL и выполните его. Данные живые
+          — их отдаёт
+          <code>odata-v4-typeorm-improved</code> поверх TypeORM и SQLite.
+        </p>
+      </div>
+      <button id="theme" type="button" class="theme-toggle" aria-live="polite"></button>
     </header>
 
     <main class="layout">
@@ -31,14 +50,14 @@
           </label>
           <textarea
             id="filter"
-            rows="2"
+            rows="4"
             spellcheck="false"
             placeholder="contains(title,'SQL') and id gt 2"
           ></textarea>
           <p class="hint">
             Сравнения <code>eq ne gt ge lt le</code>, логика <code>and or not</code>, арифметика
             <code>add sub mul div mod</code>, функции
-            <code>contains startswith tolower length substring replace year</code>.
+            <code>contains startswith tolower length substring replace year cast</code>.
           </p>
         </div>
 
@@ -63,24 +82,33 @@
         </div>
 
         <div class="field">
-          <label for="orderby">$orderby</label>
-          <input id="orderby" spellcheck="false" list="orderby-options" />
-          <datalist id="orderby-options"></datalist>
+          <label for="orderby">
+            $orderby
+            <span class="tag">поле и направление</span>
+          </label>
+          <div class="field-row">
+            <input id="orderby" spellcheck="false" list="orderby-options" />
+            <datalist id="orderby-options"></datalist>
+            <select id="orderby-direction" aria-label="Направление сортировки">
+              <option value="asc">asc — по возрастанию</option>
+              <option value="desc">desc — по убыванию</option>
+            </select>
+          </div>
         </div>
 
-        <div class="field-row">
-          <div class="field">
-            <label for="top">$top</label>
-            <input id="top" type="number" min="0" max="100" placeholder="—" />
-          </div>
-          <div class="field">
-            <label for="skip">$skip</label>
-            <input id="skip" type="number" min="0" placeholder="—" />
-          </div>
-          <div class="field">
-            <label for="search">$search</label>
-            <input id="search" spellcheck="false" placeholder="—" />
-          </div>
+        <div class="field">
+          <label for="top">$top</label>
+          <input id="top" type="number" min="0" max="100" placeholder="—" />
+        </div>
+
+        <div class="field">
+          <label for="skip">$skip</label>
+          <input id="skip" type="number" min="0" placeholder="—" />
+        </div>
+
+        <div class="field">
+          <label for="search">$search</label>
+          <input id="search" spellcheck="false" placeholder="—" />
         </div>
 
         <div class="field">

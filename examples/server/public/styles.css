@@ -3,38 +3,37 @@
  *
  * Без сборки и без внешних зависимостей: страницу отдаёт express статикой, и она
  * должна открываться сразу после `yarn server`, без установки чего-либо ещё.
- * Тема следует системной — цвета заданы токенами и переопределяются одним блоком.
+ *
+ * ТЕМА. По умолчанию берётся системная, кнопка в шапке переключает её вручную.
+ * Обе пары цветов записаны одним токеном через `light-dark()`, а выбор темы меняет
+ * единственное свойство — `color-scheme` на корне. Второй блок с тёмной палитрой
+ * не нужен: медиазапрос и селектор `[data-theme]` не умеют делить один набор
+ * объявлений, и переписывать десять токенов дважды пришлось бы вручную.
  */
 
 :root {
   color-scheme: light dark;
 
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --border: #d8dce3;
-  --text: #1b1f24;
-  --muted: #616a75;
-  --accent: #2f6feb;
-  --accent-contrast: #ffffff;
-  --code-bg: #eef1f5;
-  --ok: #1a7f37;
-  --error: #c4351b;
+  --bg: light-dark(#f6f7f9, #14171b);
+  --panel: light-dark(#ffffff, #1c2026);
+  --border: light-dark(#d8dce3, #2f353d);
+  --text: light-dark(#1b1f24, #e6e9ed);
+  --muted: light-dark(#616a75, #9aa4b0);
+  --accent: light-dark(#2f6feb, #58a6ff);
+  --accent-contrast: light-dark(#ffffff, #0d1117);
+  --code-bg: light-dark(#eef1f5, #23282f);
+  --ok: light-dark(#1a7f37, #3fb950);
+  --error: light-dark(#c4351b, #f85149);
   --radius: 8px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14171b;
-    --panel: #1c2026;
-    --border: #2f353d;
-    --text: #e6e9ed;
-    --muted: #9aa4b0;
-    --accent: #58a6ff;
-    --accent-contrast: #0d1117;
-    --code-bg: #23282f;
-    --ok: #3fb950;
-    --error: #f85149;
-  }
+/* Явный выбор пользователя: атрибут ставит скрипт, дальше всё решает `light-dark()`. */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 * {
@@ -66,6 +65,16 @@ select,
 .page-header {
   max-width: 1200px;
   margin: 0 auto 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* Кнопка темы прижата к правому краю шапки и не сжимает заголовок с описанием. */
+.theme-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 h1 {
@@ -131,14 +140,25 @@ h2 {
   margin-bottom: 14px;
 }
 
+/*
+ * Строка из нескольких элементов одного поля — сейчас это `$orderby`: имя поля
+ * и направление. Направление стоит рядом с полем, а не отдельным параметром формы,
+ * потому что и в запросе оно часть одного выражения (`name desc`).
+ */
 .field-row {
   display: flex;
   gap: 10px;
 }
 
-.field-row .field {
+.field-row > input {
   flex: 1;
   min-width: 0;
+}
+
+/* Ширина по содержимому: направлений всего два, растягивать список не на что. */
+.field-row > select {
+  flex: 0 0 auto;
+  width: auto;
 }
 
 label {

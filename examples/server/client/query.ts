@@ -6,6 +6,49 @@
  */
 import { form, ui } from './dom.js';
 
+/** Направление сортировки, если в выражении его не записали: умолчание OData. */
+const DEFAULT_DIRECTION = 'asc';
+
+/** Хвост выражения сортировки: ` asc` либо ` desc` в любом регистре. */
+const DIRECTION_SUFFIX = /\s+(asc|desc)\s*$/i;
+
+/**
+ * Собирает значение `$orderby` из двух полей формы.
+ *
+ * Направление у последнего поля снимается перед подстановкой выбранного: иначе
+ * набранное руками `name desc` вместе со списком дало бы `name desc asc` — выражение,
+ * которое сервер обязан отвергнуть. Источник правды один, и это выпадающий список;
+ * URL пересобирается на каждое изменение, поэтому подмена видна сразу.
+ *
+ * Список полей в поле ввода при этом сохраняется: `name desc,id` плюс `asc` даёт
+ * `name desc,id asc` — направление относится к последнему полю, как и в самом OData.
+ */
+export function buildOrderBy(fields: string, direction: string): string {
+  const trimmed = fields.trim();
+
+  return trimmed === '' ? '' : `${trimmed.replace(DIRECTION_SUFFIX, '')} ${direction}`;
+}
+
+/**
+ * Разбирает значение `$orderby` обратно на поля и направление.
+ *
+ * Нужно примерам: они приходят готовым выражением (`name desc`), а на форме теперь
+ * два элемента. Выражение без направления читается как `asc` — так же его понимает
+ * и сервер.
+ */
+export function splitOrderBy(value: string): { fields: string; direction: string } {
+  const match = DIRECTION_SUFFIX.exec(value);
+
+  if (!match) {
+    return { fields: value.trim(), direction: DEFAULT_DIRECTION };
+  }
+
+  return {
+    fields: value.slice(0, match.index).trim(),
+    direction: (match[1] as string).toLowerCase(),
+  };
+}
+
 /** Собирает адрес запроса из непустых полей формы. */
 export function buildQuery(): string {
   const params = new URLSearchParams();
@@ -20,7 +63,7 @@ export function buildQuery(): string {
   add('$filter', form.filter.value);
   add('$select', form.select.value);
   add('$expand', form.expand.value);
-  add('$orderby', form.orderby.value);
+  add('$orderby', buildOrderBy(form.orderby.value, form.orderbyDirection.value));
   add('$top', form.top.value);
   add('$skip', form.skip.value);
   add('$search', form.search.value);

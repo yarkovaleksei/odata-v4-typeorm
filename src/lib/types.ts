@@ -38,6 +38,19 @@ export interface SqlOptions {
   resolveRelation?: RelationResolver;
 
   /**
+   * Какого типа EDM колонка по пути свойства — нужно приведению `cast(x, Edm.String)`.
+   *
+   * Второй канал метаданных рядом с {@link SqlOptions.resolveRelation} и по тому же принципу:
+   * компилятор объявляет потребность, а закрывает её слой выполнения, у которого есть
+   * `EntityMetadata`. Сам компилятор знает только имена свойств — решить, тотально ли
+   * приведение, он без этого не может.
+   *
+   * Не передан — `cast` отвергается `ODataUnsupportedError`, как отвергается лямбда при прямом
+   * вызове `createFilter` без метаданных. `executeQuery` передаёт функцию сам.
+   */
+  resolveColumnType?: ColumnTypeResolver;
+
+  /**
    * Выносить ли значения литералов в параметры (`:p0`) вместо подстановки в текст SQL.
    *
    * Выключать стоит только там, где SQL собирают и исполняют вручную и параметры некуда
@@ -101,6 +114,16 @@ export type RelationResolver = (
   parentAlias: string,
   childAlias: string
 ) => RelationSource | undefined;
+
+/**
+ * Разрешает путь свойства в примитивный тип EDM.
+ *
+ * @param propertyPath - путь от текущего уровня: `'name'`, `'author/name'`.
+ * @returns имя типа EDM (`'Edm.Int32'`) либо `undefined`, если такого свойства нет или это
+ *   связь, а не колонка. `undefined` — это «тип неизвестен», и приведение с ним отвергается:
+ *   догадка о типе означала бы догадку о том, может ли `CAST` провалиться.
+ */
+export type ColumnTypeResolver = (propertyPath: string) => string | undefined;
 
 /**
  * Параметры OData V4 в «сыром» виде, как их обычно передают в query string.

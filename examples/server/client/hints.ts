@@ -132,14 +132,14 @@ export function renderFieldHints(resource: SchemaResource, schema: SchemaResourc
 
   fillDatalist(ui.selectOptions, [...fieldNames, ...relationPaths]);
   fillDatalist(ui.expandOptions, relationNames);
-  fillDatalist(
-    ui.orderbyOptions,
-    fieldNames.flatMap((name) => [`${name} asc`, `${name} desc`])
-  );
+
+  // Направление выбирается отдельным списком, поэтому здесь только имена — и свои,
+  // и пути по связям: сортировать по полю связи (`author/name`) OData позволяет.
+  fillDatalist(ui.orderbyOptions, [...fieldNames, ...relationPaths]);
 
   form.select.placeholder = fieldNames.slice(0, 2).join(',') || 'id';
   form.expand.placeholder = relationNames.slice(0, 2).join(',') || 'связей нет';
-  form.orderby.placeholder = `${fieldNames[0] ?? 'id'} asc`;
+  form.orderby.placeholder = fieldNames[0] ?? 'id';
   form.filter.placeholder = buildFilterPlaceholder(resource);
 
   markActiveChips();

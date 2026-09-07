@@ -32,8 +32,9 @@ import { normalizeDialect } from '../dialect';
 import { ODataUnsupportedError } from '../errors';
 import { convertLiteral, literalToSql } from '../literal';
 import { type Token, TokenType } from '../odataParser';
-import type { RelationSource, SqlDialect, SqlOptions } from '../types';
+import type { ColumnTypeResolver, RelationSource, SqlDialect, SqlOptions } from '../types';
 import { VISITOR_DEFAULTS } from './defaults';
+import { dateTimeBound, resolveCast } from './edmCast';
 
 /** Строковые поля посетителя, в которые ветки обхода дописывают SQL. */
 type TargetField = 'where' | 'select' | 'orderby';
@@ -183,6 +184,16 @@ export class TypeOrmVisitor {
 
   /** Алиас внешнего уровня — к нему относятся имена, не начинающиеся с переменной лямбды. */
   private outerAlias = '';
+
+  /**
+   * Как узнать тип свойства внешнего уровня из тела лямбды.
+   *
+   * Парный к {@link TypeOrmVisitor.outerAlias}: имя без переменной лямбды относится к внешней
+   * сущности, а `options.resolveColumnType` у этого посетителя переведён на связанную.
+   * Без второй функции `cast(pages, Edm.String)` внутри `books/any(b: …)` спрашивал бы тип
+   * колонки не у той сущности.
+   */
+  private outerResolveColumnType?: ColumnTypeResolver;
 
   /**
    * Как записать колонку связанной сущности внутри тела лямбды.
@@ -357,6 +368,73 @@ export class TypeOrmVisitor {
   private trackField(path: string): void {
     if (!this.referencedFields.includes(path)) {
       this.referencedFields.push(path);
+    }
+  }
+
+  /**
+   * Переводит резолвер типов на уровень вглубь: путь дополняется префиксом связи.
+   *
+   * @param prefix - путь связей от текущего уровня до нового.
+   * @returns резолвер для дочернего посетителя либо `undefined`, если своего резолвера нет.
+   */
+  private rebaseColumnTypeResolver(prefix: readonly string[]): ColumnTypeResolver | undefined {
+    const resolve = this.options.resolveColumnType;
+
+    if (!resolve) {
+      return undefined;
+    }
+
+    return (path) => resolve([...prefix, path].join('/'));
+  }
+
+  /**
+   * Тип EDM свойства по пути, записанному так, как он выглядит в этом фрагменте запроса.
+   *
+   * Внутри тела лямбды действует то же правило, что и в
+   * {@link TypeOrmVisitor.visitInsideLambda}: путь с переменной относится к связанной
+   * сущности, любой другой — к внешней. Отсюда и две функции разрешения.
+   *
+   * @returns имя типа EDM либо `undefined`, если тип неизвестен: резолвер не передан,
+   *   свойства нет либо путь ведёт через связь внутри лямбды.
+   */
+  private resolveTypeOfPath(path: string): string | undefined {
+    if (!this.lambdaVariable) {
+      return this.options.resolveColumnType?.(path);
+    }
+
+    const segments = path.split('/');
+
+    if (segments[0] !== this.lambdaVariable) {
+      return this.outerResolveColumnType?.(path);
+    }
+
+    return segments.length === 2
+      ? this.options.resolveColumnType?.(segments[1] as string)
+      : undefined;
+  }
+
+  /**
+   * Тип EDM операнда: колонки или литерала.
+   *
+   * Выражения (арифметика, вызовы функций) типа не имеют: выводить его пришлось бы правилами
+   * вроде «`INTEGER` плюс `INTEGER` — снова `INTEGER`», которые у СУБД расходятся. Такой
+   * операнд остаётся без типа, и приведение над ним отвергается — см.
+   * {@link TypeOrmVisitor.visitCast}.
+   */
+  private inferEdmType(node: Token): string | undefined {
+    switch (node.type) {
+      case TokenType.Literal:
+        // `null` не тип, а отсутствие значения: приводить его не к чему.
+        return node.value === 'null' ? undefined : (node.value as string);
+
+      case TokenType.ODataIdentifier:
+        return this.resolveTypeOfPath(node.value.name as string);
+
+      case TokenType.PropertyPathExpression:
+        return this.resolveTypeOfPath(node.raw);
+
+      default:
+        return undefined;
     }
   }
 
@@ -707,6 +785,10 @@ export class TypeOrmVisitor {
       ...this.options,
       // Пустой корневой алиас не должен давать ведущее подчёркивание в имени JOIN-алиаса.
       alias: this.alias ? `${this.alias}_${navigationProperty}` : navigationProperty,
+      // Пути внутри связи отсчитываются от неё самой, а резолвер знает пути от корня —
+      // поэтому он передаётся вглубь со сдвигом на имя связи. Так же устроен резолвер
+      // связей: слой выполнения отдаёт корневой, а вложенность добавляет компилятор.
+      resolveColumnType: this.rebaseColumnTypeResolver([navigationProperty]),
     });
 
     visitor.parameterSeed = this.parameterSeed;
@@ -734,6 +816,20 @@ export class TypeOrmVisitor {
     this.append(context, this.qualify(node.value.name));
 
     context.identifier = node.value.name;
+  }
+
+  /**
+   * Имя типа вне приведения: `name eq Edm.String`.
+   *
+   * Грамматика допускает имя типа в любой позиции аргумента, но осмысленно оно ровно
+   * в одной — втором аргументе `cast`, где его разбирает {@link TypeOrmVisitor.visitCast},
+   * не доходя до этого метода. Везде остальное имя типа — не значение, и сравнивать с ним
+   * нечего; отдельный метод нужен, чтобы отказ назвал причину, а не тип узла AST.
+   *
+   * @throws {ODataUnsupportedError} всегда.
+   */
+  protected VisitTypeReference(node: Token): never {
+    throw new ODataUnsupportedError(`type name "${node.value.name}" outside of cast()`, node.raw);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -1046,10 +1142,16 @@ export class TypeOrmVisitor {
       alias: childAlias,
       // Вложенные лямбды считают связи уже от целевой сущности.
       resolveRelation: source.resolveRelation,
+      // И типы колонок — тоже: `b/pages` внутри `books/any(b: …)` это колонка книги.
+      resolveColumnType: this.rebaseColumnTypeResolver(navigation),
     });
 
     inner.lambdaVariable = variable;
     inner.outerAlias = this.alias;
+    // Имена без переменной лямбды разрешает внешний уровень — тем же способом, каким
+    // разрешил бы их у себя. Замыкание, а не сама функция из опций: этот посетитель может
+    // и сам быть телом лямбды, и тогда правило уровнем выше уже другое.
+    inner.outerResolveColumnType = (path) => this.resolveTypeOfPath(path);
     inner.lambdaColumn = source.column;
     inner.parameterSeed = this.parameterSeed;
 
@@ -1237,6 +1339,18 @@ export class TypeOrmVisitor {
         this.append(context, 'CURRENT_TIMESTAMP');
         break;
 
+      case 'mindatetime':
+        this.visitDateTimeBound('min', context);
+        break;
+
+      case 'maxdatetime':
+        this.visitDateTimeBound('max', context);
+        break;
+
+      case 'cast':
+        this.visitCast(params, context, node.raw);
+        break;
+
       default:
         throw new ODataUnsupportedError(`${method}()`, node.raw);
     }
@@ -1418,7 +1532,7 @@ export class TypeOrmVisitor {
       // convertLiteral отдаёт миллисекунды — единица `Edm.Duration` внутри библиотеки.
       const milliseconds = convertLiteral(value.value, value.raw) as number;
 
-      this.appendNumber(context, milliseconds / 1000);
+      this.appendComputed(context, milliseconds / 1000, String(milliseconds / 1000));
 
       return;
     }
@@ -1465,14 +1579,16 @@ export class TypeOrmVisitor {
   }
 
   /**
-   * Дописывает число, вычисленное самой библиотекой, соблюдая режим параметров.
+   * Дописывает значение, вычисленное самой библиотекой, соблюдая режим параметров.
    *
-   * Значение не приходит из запроса дословно (это результат свёртки литерала), но путь
-   * до SQL у него общий с обычными литералами: при `useParameters` в текст уходит `:pN`.
-   * Так номера параметров остаются сквозными, а форма SQL — одинаковой независимо от того,
-   * что стояло в запросе.
+   * Значение не приходит из запроса дословно (это результат свёртки литерала или константа
+   * вроде границы диапазона дат), но путь до SQL у него общий с обычными литералами:
+   * при `useParameters` в текст уходит `:pN`. Так номера параметров остаются сквозными,
+   * а форма SQL — одинаковой независимо от того, что стояло в запросе.
+   *
+   * @param inline - запись значения в тексте SQL для режима `useParameters: false`.
    */
-  private appendNumber(context: Context, value: number) {
+  private appendComputed(context: Context, value: unknown, inline: string) {
     if (this.options.useParameters) {
       const name = `p${this.parameterSeed++}`;
 
@@ -1484,7 +1600,90 @@ export class TypeOrmVisitor {
     }
 
     context.literal = value;
-    this.append(context, String(value));
+    this.append(context, inline);
+  }
+
+  /**
+   * Границы диапазона `Edm.DateTimeOffset`: `mindatetime()` и `maxdatetime()`.
+   *
+   * Значение уезжает параметром, а не инлайном в SQL: формат записи даты у СУБД разный,
+   * а привязку `Date` драйвер и так делает для каждого литерала даты-времени.
+   * Сами границы и обоснование — в {@link dateTimeBound}.
+   */
+  private visitDateTimeBound(bound: 'min' | 'max', context: Context) {
+    const value = dateTimeBound(bound, this.dialect);
+    const inline = `'${value.toISOString().replace('T', ' ').replace('Z', '')}'`;
+
+    this.appendComputed(context, value, inline);
+  }
+
+  /**
+   * Приведение типа: `cast(x, Edm.String)`.
+   *
+   * Поддерживается только тотальное подмножество — приведения, которые не могут провалиться
+   * (перечень и обоснование — в {@link resolveCast}). Остальные отвергаются целиком: по
+   * спецификации неудачное приведение обязано дать `null`, а в SQL оно даёт ошибку, ноль или
+   * предупреждение, и портируемого `TRY_CAST` не существует.
+   *
+   * Тип исходного выражения библиотека узнаёт двумя способами: у литерала он записан в самом
+   * дереве, у колонки его отдаёт хук `resolveColumnType` из {@link SqlOptions}. Без него
+   * (прямой вызов `createFilter` без метаданных) приведение отвергается — угадывать, может ли
+   * `CAST` провалиться, библиотека не берётся.
+   *
+   * Форма `cast(<тип>)` без первого аргумента приводит текущий экземпляр сущности и смысла
+   * в `$filter` не имеет: результат — сама сущность, сравнивать её не с чем.
+   *
+   * @throws {ODataUnsupportedError} для нетотального приведения, неизвестного типа исходного
+   *   выражения, незнакомого драйвера и односоставной формы вызова.
+   */
+  private visitCast(params: Token[], context: Context, raw: string) {
+    const value = argumentAt(params, 0, 'cast');
+    const typeNode = argumentAt(params, 1, 'cast');
+
+    if (typeNode.type !== TokenType.TypeReference) {
+      throw new ODataUnsupportedError('cast() to something other than a type name', raw);
+    }
+
+    const target = typeNode.value.name as string;
+    const source = this.inferEdmType(value);
+
+    if (!source) {
+      // Тип неизвестен: либо метаданных нет, либо приводится выражение, а не колонка.
+      throw new ODataUnsupportedError(`cast() over an expression of unknown type`, raw);
+    }
+
+    const plan = resolveCast(source, target, this.dialect);
+
+    if (plan === 'not-total') {
+      // Пара названа целиком: без неё сообщение «cast не поддержан» заставляло бы гадать,
+      // какое именно приведение библиотека отвергла.
+      throw new ODataUnsupportedError(
+        `cast from ${source} to ${target} (may fail at run time)`,
+        raw
+      );
+    }
+
+    if (plan === 'unknown-dialect') {
+      throw new ODataUnsupportedError(`cast to ${target} in dialect "${this.dialect}"`, raw);
+    }
+
+    if (plan.form === 'identity') {
+      this.Visit(value, context);
+
+      return;
+    }
+
+    if (plan.form === 'function') {
+      this.append(context, `${plan.sqlFunction}(`);
+      this.Visit(value, context);
+      this.append(context, ')');
+
+      return;
+    }
+
+    this.append(context, 'CAST(');
+    this.Visit(value, context);
+    this.append(context, ` AS ${plan.sqlType})`);
   }
 
   /**

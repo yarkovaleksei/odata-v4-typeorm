@@ -16,10 +16,11 @@ import {
   renderSchemaUnavailable,
   toggleToken,
 } from './hints.js';
-import { buildQuery, refreshUrl, run, setStatus } from './query.js';
+import { buildQuery, refreshUrl, run, setStatus, splitOrderBy } from './query.js';
 import { renderExamples } from './render.js';
 import { findResource, loadSchema } from './schema.js';
 import { loadSampleRows } from './samples.js';
+import { initTheme } from './theme.js';
 import type { Example, Sample, SchemaResource } from './types.js';
 
 /** Описание всех опубликованных ресурсов; загружается один раз при старте. */
@@ -34,10 +35,15 @@ function currentResource(): SchemaResource | undefined {
 
 /** Подставляет пример в форму и сразу выполняет его. */
 function applyExample(example: Example): void {
+  // Сортировка в примере записана одним выражением, а на форме её собирают два
+  // элемента — поле и направление, — поэтому значение раскладывается обратно.
+  const orderby = splitOrderBy(example.query.$orderby ?? '');
+
   form.filter.value = example.query.$filter ?? '';
   form.select.value = example.query.$select ?? '';
   form.expand.value = example.query.$expand ?? '';
-  form.orderby.value = example.query.$orderby ?? '';
+  form.orderby.value = orderby.fields;
+  form.orderbyDirection.value = orderby.direction;
   form.top.value = example.query.$top ?? '';
   form.skip.value = example.query.$skip ?? '';
   form.search.value = example.query.$search ?? '';
@@ -53,6 +59,9 @@ function reset(): void {
     form[key].value = '';
   }
 
+  // Направление — не текстовое поле: пустого значения у него нет, и очистка возвращает
+  // его к умолчанию OData.
+  form.orderbyDirection.value = 'asc';
   form.count.checked = false;
 
   ui.output.textContent = 'Нажмите «Выполнить», чтобы увидеть ответ.';
@@ -127,6 +136,9 @@ function bindEvents(): void {
 }
 
 async function init(): Promise<void> {
+  // Тема первой: она не зависит от схемы, а страница уже видна пользователю.
+  initTheme();
+
   schema = await loadSchema();
 
   for (const resource of schema) {

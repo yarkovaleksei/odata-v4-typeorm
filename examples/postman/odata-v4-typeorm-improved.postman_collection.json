@@ -1094,6 +1094,114 @@
             "description": "Литерал длительности сворачивается в число ещё при компиляции, поэтому функция работает и в СУБД без типа интервала. Над колонкой она требует типа длительности и доступна только в PostgreSQL и Oracle."
           },
           "response": []
+        },
+        {
+          "name": "cast — число в строку",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=cast(age,Edm.String) eq '36'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "cast(age,Edm.String) eq '36'"
+                }
+              ]
+            },
+            "description": "Приведение поддержано в тотальном подмножестве — там, где CAST не может провалиться. Число в строку тотально везде, а имя типа в SQL у каждой СУБД своё: TEXT в PostgreSQL и SQLite, CHAR в MySQL, NVARCHAR(MAX) в MS SQL."
+          },
+          "response": []
+        },
+        {
+          "name": "cast — подстрока в числе",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=contains(cast(age,Edm.String),'4')&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "contains(cast(age,Edm.String),'4')"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "То, ради чего cast и применяется в реальных запросах: искать подстроку в числовой колонке иначе нечем."
+          },
+          "response": []
+        },
+        {
+          "name": "cast — расширение числа",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=cast(age,Edm.Int64) gt 40",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "cast(age,Edm.Int64) gt 40"
+                }
+              ]
+            },
+            "description": "Расширяющее приведение тотально: значение помещается в тип назначения при любом входе. Обратное направление (Edm.Int64 → Edm.Int32) отвергается — оно переполняется, а вернуть на этом месте null, как требует спецификация, в переносимом SQL нечем."
+          },
+          "response": []
+        },
+        {
+          "name": "mindatetime и maxdatetime",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=registeredAt ge mindatetime() and registeredAt le maxdatetime()&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "registeredAt ge mindatetime() and registeredAt le maxdatetime()"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Сторожевые значения: диапазон покрывает любое хранимое значение, поэтому условие истинно для каждой непустой даты. Границей служит диапазон хранения самой СУБД — строк вне него не бывает, поэтому это точный ответ, а не приближение. В MySQL нижняя граница 1000-01-01: значение вне диапазона MySQL превращает в сравнении в NULL, то есть начало эры EDM молча отфильтровало бы всё."
+          },
+          "response": []
         }
       ]
     },
@@ -1732,6 +1840,31 @@
               ]
             },
             "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Непереносимое приведение — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=cast(name,Edm.Int32) eq 1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "cast(name,Edm.Int32) eq 1"
+                }
+              ]
+            },
+            "description": "Разбор строки в число проваливается на любом нечисловом значении. По спецификации неудачное приведение обязано дать null, а в SQL оно даёт ошибку уровня СУБД (PostgreSQL), ноль с предупреждением (MySQL) или 0.0 (SQLite); портируемого TRY_CAST нет. Ответ — 400 с названием пары типов, а не молча неверная выборка."
           },
           "response": []
         }

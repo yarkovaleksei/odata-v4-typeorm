@@ -644,6 +644,13 @@ GET /api/users?$filter=id mul 2 gt 10
 GET /api/users?$filter=length(name) gt 3
 GET /api/users?$filter=year(createdAt) eq 2024
 
+# Приведение типа: тотальное подмножество — число или GUID в строку, расширение числа
+GET /api/users?$filter=cast(id,Edm.String) eq '42'
+GET /api/users?$filter=contains(cast(id,Edm.String),'4')   # подстрока в числовой колонке
+
+# Границы диапазона дат: условие истинно для любой непустой даты
+GET /api/users?$filter=createdAt ge mindatetime() and createdAt le maxdatetime()
+
 # Выборка полей
 GET /api/users?$select=id,name
 

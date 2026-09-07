@@ -401,9 +401,96 @@ describe('$filter — функции даты и времени', () => {
       query: { $filter: "age gt totalseconds(duration'-PT1H')" },
       expected: [1, 2, 3, 4],
     },
+    {
+      // Сторожевое значение: истинно для любой непустой даты. Автор 3 не попадает —
+      // registeredAt у него NULL, а сравнение с NULL не истинно ни при какой границе.
+      name: 'mindatetime как нижняя граница',
+      query: { $filter: 'registeredAt ge mindatetime()' },
+      expected: [1, 2, 4],
+    },
+    {
+      name: 'maxdatetime как верхняя граница',
+      query: { $filter: 'registeredAt le maxdatetime()' },
+      expected: [1, 2, 4],
+    },
+    {
+      // Обе границы разом: диапазон обязан покрывать все хранимые значения целиком.
+      name: 'диапазон между mindatetime и maxdatetime',
+      query: { $filter: 'registeredAt ge mindatetime() and registeredAt le maxdatetime()' },
+      expected: [1, 2, 4],
+    },
   ];
 
   runMatrix(authorIds, cases);
+});
+
+/**
+ * Приведения (R-45). Поддержано тотальное подмножество — пары типов, где `CAST`
+ * не может провалиться; всё остальное отвергается, а не транслируется приблизительно.
+ */
+describe('$filter — cast', () => {
+  const cases: readonly MatrixCase[] = [
+    {
+      // Ключевой случай: ради сравнения числа как строки `cast` в реальных запросах
+      // и применяется. Имя типа в SQL у каждой СУБД своё (TEXT / CHAR / TEXT).
+      name: 'число в строку',
+      query: { $filter: "cast(age,Edm.String) eq '36'" },
+      expected: [1],
+    },
+    {
+      name: 'число в строку внутри contains',
+      query: { $filter: "contains(cast(age,Edm.String),'4')" },
+      expected: [2, 3],
+    },
+    {
+      name: 'расширение целого',
+      query: { $filter: 'cast(age,Edm.Int64) gt 40' },
+      expected: [2, 3],
+    },
+    {
+      name: 'расширение целого в приближённое',
+      query: { $filter: 'cast(age,Edm.Double) lt 30' },
+      expected: [4],
+    },
+    {
+      // Приведение к собственному типу спецификация разрешает; SQL для него не нужен,
+      // и в запрос уходит сама колонка.
+      name: 'приведение к собственному типу',
+      query: { $filter: "cast(name,Edm.String) eq 'Ada'" },
+      expected: [1],
+    },
+    {
+      // Тип литерала известен из дерева разбора, метаданные для него не нужны.
+      name: 'приведение литерала',
+      query: { $filter: 'cast(36,Edm.String) eq cast(age,Edm.String)' },
+      expected: [1],
+    },
+  ];
+
+  runMatrix(authorIds, cases);
+
+  it('приведение по пути связи', async () => {
+    // Тип спрашивается у сущности связи, а не у корня: `age` есть у обеих, но с одним
+    // резолвером на все уровни ответ пришёл бы не от той.
+    expect((await bookIds({ $filter: "cast(author/age,Edm.String) eq '36'" })).sort()).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it('нетотальное приведение отвергается', async () => {
+    // Разбор строки в число проваливается на любом нечисловом значении, а вернуть на этом
+    // месте `null`, как требует спецификация, в переносимом SQL нечем.
+    const error = await expectRejected(authorIds, { $filter: 'cast(name,Edm.Int32) eq 1' });
+
+    expect(error).toBeInstanceOf(ODataUnsupportedError);
+    expect(error.message).toContain('Edm.String to Edm.Int32');
+  });
+
+  it('isof отвергается посетителем', async () => {
+    const error = await expectRejected(authorIds, { $filter: 'isof(name,Edm.String)' });
+
+    expect(error).toBeInstanceOf(ODataUnsupportedError);
+  });
 });
 
 describe('$filter — пути по связям', () => {

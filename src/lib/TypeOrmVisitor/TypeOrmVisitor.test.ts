@@ -1,6 +1,6 @@
 import { ODataUnsupportedError } from '../errors';
 import { parseQueryOptions, type Token, TokenType } from '../odataParser';
-import type { RelationResolver, RelationSource, SqlOptions } from '../types';
+import type { ColumnTypeResolver, RelationResolver, RelationSource, SqlOptions } from '../types';
 import { TypeOrmVisitor } from './TypeOrmVisitor';
 
 /**
@@ -28,6 +28,23 @@ function relationResolver(known: readonly string[]): RelationResolver {
       ? source(childAlias, `${childAlias}.parent_id = ${parentAlias}.id`)
       : undefined;
 }
+
+/**
+ * Типы колонок для приведений: пути от корня, как их отдаёт `executeQuery`.
+ *
+ * Настоящий резолвер собирается из метаданных TypeORM и проверяется матрицей на трёх СУБД.
+ * Здесь проверяется другое — что посетитель спрашивает тип у нужного уровня вложенности.
+ */
+const COLUMN_EDM_TYPES: Readonly<Record<string, string>> = {
+  name: 'Edm.String',
+  age: 'Edm.Int32',
+  rating: 'Edm.Double',
+  birthday: 'Edm.Date',
+  createdAt: 'Edm.DateTimeOffset',
+  'books/pages': 'Edm.Int32',
+};
+
+const resolveColumnType: ColumnTypeResolver = (path) => COLUMN_EDM_TYPES[path];
 
 /** Узел AST, собранный руками: `createFilter` принимает готовый `Token` от вызывающего кода. */
 function token(type: TokenType, raw: string, value: Record<string, unknown>): Token {
@@ -346,6 +363,183 @@ describe('TypeOrmVisitor', () => {
         const { sql } = processQuery("$filter=trim(name) eq 'John'");
 
         expect(sql).toContain('WHERE TRIM(u.name) = :p0');
+      });
+    });
+
+    describe('cast', () => {
+      it.each([
+        ['postgres', 'CAST(u.age AS TEXT)'],
+        ['mysql', 'CAST(u.age AS CHAR)'],
+        ['sqlite', 'CAST(u.age AS TEXT)'],
+        ['mssql', 'CAST(u.age AS NVARCHAR(MAX))'],
+        ['oracle', 'CAST(u.age AS VARCHAR2(4000))'],
+      ])('число в строку в диалекте %s', (dialect, expected) => {
+        const { sql } = processQuery("$filter=cast(age,Edm.String) eq '30'", {
+          dialect,
+          resolveColumnType,
+        });
+
+        expect(sql).toContain(expected);
+      });
+
+      it('расширение числа даёт CAST к более широкому типу', () => {
+        const { sql } = processQuery('$filter=cast(age,Edm.Int64) gt 30', {
+          dialect: 'postgres',
+          resolveColumnType,
+        });
+
+        expect(sql).toContain('CAST(u.age AS BIGINT)');
+      });
+
+      it('приведение к собственному типу не даёт CAST вовсе', () => {
+        // Приведение существует в запросе, но работы для СУБД в нём нет: тип уже тот.
+        const { sql } = processQuery("$filter=cast(name,Edm.String) eq 'Ada'", {
+          dialect: 'postgres',
+          resolveColumnType,
+        });
+
+        expect(sql).toContain('WHERE u.name = :p0');
+        expect(sql).not.toContain('CAST');
+      });
+
+      it('дата в дату-время в SQLite делается функцией, а не CAST', () => {
+        // `CAST('2020-01-15' AS DATETIME)` в SQLite даёт 2020: числовая аффинность
+        // разбирает строку до первого нецифрового символа и уничтожает значение.
+        const { sql } = processQuery('$filter=cast(birthday,Edm.DateTimeOffset) gt 2020-01-01', {
+          dialect: 'sqlite',
+          resolveColumnType,
+        });
+
+        expect(sql).toContain('datetime(u.birthday)');
+      });
+
+      it('тип литерала берётся из дерева, метаданные для него не нужны', () => {
+        const { sql } = processQuery("$filter=cast(42,Edm.String) eq '42'", {
+          dialect: 'postgres',
+        });
+
+        expect(sql).toContain('CAST(:p0 AS TEXT)');
+      });
+
+      it('нетотальное приведение отвергается с названием пары типов', () => {
+        // Разбор строки в число проваливается на любом нечисловом значении, а вернуть
+        // на этом месте `null`, как требует спецификация, в переносимом SQL нечем.
+        let caught: ODataUnsupportedError | undefined;
+
+        try {
+          processQuery('$filter=cast(name,Edm.Int32) eq 1', {
+            dialect: 'postgres',
+            resolveColumnType,
+          });
+        } catch (e) {
+          caught = e as ODataUnsupportedError;
+        }
+
+        expect(caught).toBeInstanceOf(ODataUnsupportedError);
+        expect(caught?.feature).toContain('cast from Edm.String to Edm.Int32');
+      });
+
+      it('сужение числа тоже отвергается', () => {
+        expect(() =>
+          processQuery('$filter=cast(rating,Edm.Int32) eq 4', {
+            dialect: 'postgres',
+            resolveColumnType,
+          })
+        ).toThrow(ODataUnsupportedError);
+      });
+
+      it('без резолвера типов приведение колонки отвергается', () => {
+        // Не зная типа колонки, нельзя решить, может ли CAST провалиться. Догадка здесь
+        // означала бы догадку о соответствии спецификации.
+        let caught: ODataUnsupportedError | undefined;
+
+        try {
+          processQuery("$filter=cast(age,Edm.String) eq '30'", { dialect: 'postgres' });
+        } catch (e) {
+          caught = e as ODataUnsupportedError;
+        }
+
+        expect(caught?.feature).toBe('cast() over an expression of unknown type');
+      });
+
+      it('на незнакомом драйвере приведение отвергается', () => {
+        // Имена типов в CAST не стандартизованы: угаданное имя дало бы синтаксическую
+        // ошибку в каждом запросе.
+        let caught: ODataUnsupportedError | undefined;
+
+        try {
+          processQuery("$filter=cast(age,Edm.String) eq '30'", {
+            dialect: 'ansi',
+            resolveColumnType,
+          });
+        } catch (e) {
+          caught = e as ODataUnsupportedError;
+        }
+
+        expect(caught?.feature).toBe('cast to Edm.String in dialect "ansi"');
+      });
+
+      it('имя типа вне cast отвергается по имени', () => {
+        let caught: ODataUnsupportedError | undefined;
+
+        try {
+          processQuery('$filter=name eq Edm.String');
+        } catch (e) {
+          caught = e as ODataUnsupportedError;
+        }
+
+        expect(caught?.feature).toBe('type name "Edm.String" outside of cast()');
+      });
+
+      it('isof отвергается посетителем, а не парсером', () => {
+        // Раньше запрос не проходил грамматику, и в сообщении была позиция символа.
+        let caught: ODataUnsupportedError | undefined;
+
+        try {
+          processQuery('$filter=isof(name,Edm.String)');
+        } catch (e) {
+          caught = e as ODataUnsupportedError;
+        }
+
+        expect(caught?.feature).toBe('isof()');
+      });
+    });
+
+    describe('mindatetime / maxdatetime', () => {
+      it('нижняя граница уезжает параметром', () => {
+        const { sql, parameters } = processQuery('$filter=createdAt ge mindatetime()', {
+          dialect: 'postgres',
+        });
+
+        expect(sql).toContain('WHERE u.createdAt >= :p0');
+        expect(parameters.get('p0')).toEqual(new Date('0001-01-01T00:00:00Z'));
+      });
+
+      it('верхняя граница — конец диапазона Edm.DateTimeOffset', () => {
+        const { parameters } = processQuery('$filter=createdAt le maxdatetime()', {
+          dialect: 'postgres',
+        });
+
+        expect(parameters.get('p0')).toEqual(new Date('9999-12-31T23:59:59.999Z'));
+      });
+
+      it('в MySQL нижняя граница — начало диапазона DATETIME', () => {
+        // Значение вне диапазона MySQL превращает в сравнении в NULL: условие
+        // перестало бы выполняться ни для одной строки.
+        const { parameters } = processQuery('$filter=createdAt ge mindatetime()', {
+          dialect: 'mysql',
+        });
+
+        expect(parameters.get('p0')).toEqual(new Date('1000-01-01T00:00:00Z'));
+      });
+
+      it('в режиме без параметров граница инлайнится', () => {
+        const { sql } = processQuery('$filter=createdAt ge mindatetime()', {
+          dialect: 'postgres',
+          useParameters: false,
+        });
+
+        expect(sql).toContain("u.createdAt >= '0001-01-01 00:00:00.000'");
       });
     });
   });
@@ -711,6 +905,31 @@ describe('TypeOrmVisitor', () => {
 
       expect(caught).toBeInstanceOf(ODataUnsupportedError);
       expect(caught?.feature).toBe('lambda over an unknown navigation property');
+    });
+
+    /**
+     * Внутри тела лямбды два источника типов сразу: `b/pages` — колонка книги, `age` —
+     * колонка внешней сущности. Один резолвер на оба пути дал бы тип не той сущности,
+     * а вместе с ним и неверный ответ на вопрос «может ли приведение провалиться».
+     */
+    it('тип колонки внутри лямбды берётся от связанной сущности', () => {
+      const { sql } = processQuery("$filter=books/any(b: cast(b/pages,Edm.String) eq '100')", {
+        dialect: 'postgres',
+        resolveRelation,
+        resolveColumnType,
+      });
+
+      expect(sql).toContain('CAST(u_books_b.pages AS TEXT)');
+    });
+
+    it('тип имени без префикса переменной берётся от внешнего уровня', () => {
+      const { sql } = processQuery("$filter=books/any(b: cast(age,Edm.String) eq '30')", {
+        dialect: 'postgres',
+        resolveRelation,
+        resolveColumnType,
+      });
+
+      expect(sql).toContain('CAST(u.age AS TEXT)');
     });
 
     it('имя без префикса переменной относится к внешнему уровню', () => {

@@ -271,8 +271,24 @@ describe('parseFilter', () => {
       expect(parseFilter('geo.distance(a,b) lt 1').value.left.value.method).toBe('geo.distance');
     });
 
-    it('точка вне вызова функции — ошибка', () => {
-      expect(() => parseFilter('geo.distance lt 1')).toThrow(ODataParseError);
+    /**
+     * Составное имя без скобки в грамматике OData может быть только именем типа: сегменты
+     * пути свойства разделяет `/`, а не `.`. Раньше такая запись отвергалась парсером,
+     * и `cast` не доходил до посетителя вовсе — отказ приходил с позицией символа
+     * вместо названия конструкции (R-43).
+     */
+    it('точка вне вызова функции даёт имя типа', () => {
+      const node = parseFilter('cast(age,Edm.String) eq 1');
+      const [value, type] = node.value.left.value.parameters;
+
+      expect(node.value.left.value.method).toBe('cast');
+      expect(value.raw).toBe('age');
+      expect(type.type).toBe(TokenType.TypeReference);
+      expect(type.value.name).toBe('Edm.String');
+    });
+
+    it('имя типа разбирается и вне cast — отвергает его посетитель', () => {
+      expect(parseFilter('name eq Edm.String').value.right.type).toBe(TokenType.TypeReference);
     });
   });
 

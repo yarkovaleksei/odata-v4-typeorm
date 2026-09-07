@@ -26,6 +26,13 @@ export const form = {
   select: byId<HTMLInputElement>('select'),
   expand: byId<HTMLInputElement>('expand'),
   orderby: byId<HTMLInputElement>('orderby'),
+  /**
+   * Направление сортировки отдельным списком: в `$orderby` оно записывается словом
+   * (`name desc`), и набирать его руками — единственное, что мешало собрать сортировку
+   * мышкой целиком. Значение всегда непустое, поэтому в {@link TEXT_FIELDS} его нет —
+   * очистка возвращает его к `asc`, а не к пустой строке.
+   */
+  orderbyDirection: byId<HTMLSelectElement>('orderby-direction'),
   top: byId<HTMLInputElement>('top'),
   skip: byId<HTMLInputElement>('skip'),
   search: byId<HTMLInputElement>('search'),
@@ -60,6 +67,7 @@ export const ui = {
   run: byId<HTMLButtonElement>('run'),
   reset: byId<HTMLButtonElement>('reset'),
   copy: byId<HTMLButtonElement>('copy'),
+  theme: byId<HTMLButtonElement>('theme'),
 };
 
 /** Заполняет `<datalist>` — подсказки для ввода с клавиатуры. */

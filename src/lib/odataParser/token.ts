@@ -63,6 +63,14 @@ export enum TokenType {
   Literal = 'Literal',
   MethodCallExpression = 'MethodCallExpression',
   LambdaExpression = 'LambdaExpression',
+  /**
+   * Имя типа в позиции аргумента: `cast(age, Edm.String)`.
+   *
+   * Отдельный тип узла, а не литерал: значение здесь не данные, а имя типа, и превращать
+   * его в параметр запроса нельзя. Осмыслен он ровно в одном месте — втором аргументе
+   * `cast`; в любом другом посетитель его отвергает.
+   */
+  TypeReference = 'TypeReference',
 }
 
 /**

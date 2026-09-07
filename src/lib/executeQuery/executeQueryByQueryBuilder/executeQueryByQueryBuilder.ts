@@ -22,10 +22,11 @@ import { ODataInvalidQueryError } from '../../errors';
 import { type TypeOrmVisitor, VISITOR_DEFAULTS } from '../../TypeOrmVisitor';
 import { applyNestedPagination } from '../applyNestedPagination';
 import { applyOrderBy } from '../applyOrderBy';
-import type { QueryParams } from '../../types';
+import type { ColumnTypeResolver, QueryParams } from '../../types';
 import { mapToObject } from '../mapToObject';
 import { processIncludes } from '../processIncludes';
 import { processSearch } from '../processSearch';
+import { resolveEdmType } from '../../metadata/edmType';
 import { createRelationResolver } from '../relationSource';
 import { queryToOdataString } from '../queryToOdataString';
 import type { ExecuteQueryOptions, GetManyResponse } from '../types';
@@ -90,6 +91,25 @@ function findColumn(metadata: EntityMetadata, path: string): ColumnMetadata | un
   }
 
   return current.columns.find((column) => column.propertyPath === field);
+}
+
+/**
+ * Собирает хук `resolveColumnType` для компилятора: путь свойства → примитивный тип EDM.
+ *
+ * Обе половины уже есть: `findColumn` проходит по связям, `resolveEdmType` переводит тип
+ * колонки TypeORM в тип EDM по той же таблице, по которой строится документ `$metadata`.
+ * Не хватало только канала до компилятора — им и стал этот хук (R-44).
+ *
+ * Единственный потребитель — `cast`: по типу исходной колонки видно, может ли приведение
+ * провалиться. Незнакомый тип колонки `resolveEdmType` описывает как `Edm.String`, и это
+ * согласовано с `$metadata`: там он описан так же.
+ */
+function createColumnTypeResolver(metadata: EntityMetadata): ColumnTypeResolver {
+  return (path) => {
+    const column = findColumn(metadata, path);
+
+    return column ? resolveEdmType(column) : undefined;
+  };
 }
 
 /**
@@ -279,9 +299,10 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // Преобразуем параметры в OData-строку и затем в объект odataQuery.
   // Диалект берётся из подключения: от него зависит, какие SQL-функции подставлять
   // для функций OData (LENGTH против LEN, strftime против EXTRACT и т.д.).
-  // Метаданные сущности нужны для четырёх вещей: списка колонок SELECT по умолчанию,
-  // разрешения связей при обработке $expand, проверки невыбираемых колонок и подзапросов
-  // лямбда-операторов — последним нужны имена таблиц, которых компилятор OData не знает.
+  // Метаданные сущности нужны для пяти вещей: списка колонок SELECT по умолчанию,
+  // разрешения связей при обработке $expand, проверки невыбираемых колонок, подзапросов
+  // лямбда-операторов и типов колонок для `cast` — последним двум нужны имена таблиц
+  // и типы, которых компилятор OData не знает.
   const metadata = resolveMetadata(inputQueryBuilder, alias);
 
   const odataString = queryToOdataString(parsedQueryWithoutSearch);
@@ -289,6 +310,7 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
     alias,
     dialect: inputQueryBuilder.connection.options.type,
     resolveRelation: createRelationResolver(inputQueryBuilder.connection, metadata),
+    resolveColumnType: createColumnTypeResolver(metadata),
   });
 
   // Белые списки сверяем сразу после компиляции — до того, как что-либо попадёт в SQL.

@@ -89,8 +89,8 @@ const total = Array.isArray(result) ? result.length : result.count;
 
 | Ошибка | Причина | HTTP |
 |---|---|---|
-| `ODataParseError` | Синтаксически некорректный OData-параметр; конструкция, которой нет в грамматике (`cast`, `isof`, геофункции, `$apply`, `$compute`, `$levels`, `$skiptoken`) | `400` |
-| `ODataUnsupportedError` | Конструкция, которую грамматика принимает, но транслировать в SQL нельзя (`mindatetime`, `totaloffsetminutes`, любая неизвестная функция) | `400` |
+| `ODataParseError` | Синтаксически некорректный OData-параметр; конструкция, которой нет в грамматике (геофункции, JSON-литералы, `$apply`, `$compute`, `$levels`, `$skiptoken`) | `400` |
+| `ODataUnsupportedError` | Конструкция, которую грамматика принимает, но транслировать в SQL нельзя (`isof`, `totaloffsetminutes`, приведение `cast`, которое может провалиться, любая неизвестная функция) | `400` |
 | `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка | `400` |
 | `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются | `400` |
 | `EntityMetadataNotFoundError` | У построителя нет метаданных и `alias` не соответствует сущности | `500` |
@@ -408,6 +408,7 @@ interface SqlOptions {
   useParameters?: boolean;           // значения в параметры, а не в текст SQL; по умолчанию true
   dialect?: SqlDialect | string;     // 'postgres' | 'mysql' | … либо type из настроек TypeORM
   resolveRelation?: RelationResolver; // как развернуть связь в подзапрос — нужно лямбдам
+  resolveColumnType?: ColumnTypeResolver; // тип EDM колонки по пути — нужно cast
 }
 ```
 
@@ -418,6 +419,20 @@ interface SqlOptions {
 `resolveRelation` заполняет слой выполнения: `executeQuery` строит её из метаданных TypeORM.
 Без неё лямбда-операторы `any` / `all` отвергаются `ODataUnsupportedError` — имя таблицы
 компилятору взять неоткуда.
+
+`resolveColumnType` устроена так же и по той же причине: компилятор оперирует именами свойств
+и типа колонки не знает, а без типа нельзя решить, может ли приведение провалиться.
+`executeQuery` строит её из метаданных; без неё `cast` над колонкой отвергается
+`ODataUnsupportedError`, а над литералом работает — тип литерала записан в дереве разбора.
+
+```ts
+// Тот же хук вручную: путь свойства от корня → имя примитивного типа EDM
+const compiled = createFilter("cast(age,Edm.String) eq '36'", {
+  alias: 'Author',
+  dialect: 'postgres',
+  resolveColumnType: (path) => (path === 'age' ? 'Edm.Int32' : undefined),
+});
+```
 
 ### `ExecuteQueryOptions`
 
