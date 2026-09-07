@@ -57,18 +57,30 @@ import { dataSource } from './dataSource';
  *
  * Опубликованы все сущности схемы, кроме представления `BookSummary` — у него нет
  * первичного ключа, и набором OData оно быть не может.
+ *
+ * `maxTop` необязателен и по умолчанию равен {@link DEFAULT_MAX_TOP}. Занижать его
+ * осмысленно ровно в одном случае — когда усечение нужно показать: в демо всего несколько
+ * строк на сущность, и на потолке в сотню запрос `$top=500` неотличим от запроса без потолка.
  */
 const RESOURCES = {
   books: { entity: Book, alias: 'Book' },
   authors: { entity: Author, alias: 'Author' },
-  reviews: { entity: Review, alias: 'Review' },
+  // Потолок занижен намеренно: рецензий пять, и только так видно, что `$top` сверх лимита
+  // усекается, а не отвергается. С `$count=true` это видно в одном ответе: items короче count.
+  reviews: { entity: Review, alias: 'Review', maxTop: 2 },
   publishers: { entity: Publisher, alias: 'Publisher' },
   categories: { entity: Category, alias: 'Category' },
   tags: { entity: Tag, alias: 'Tag' },
   details: { entity: BookDetails, alias: 'BookDetails' },
   users: { entity: User, alias: 'User' },
   posts: { entity: Post, alias: 'Post' },
-} as const satisfies Record<string, { entity: EntityTarget<ObjectLiteral>; alias: string }>;
+} as const satisfies Record<
+  string,
+  { entity: EntityTarget<ObjectLiteral>; alias: string; maxTop?: number }
+>;
+
+/** Потолок страницы для ресурсов, которые не задали свой: демо открыто наружу. */
+const DEFAULT_MAX_TOP = 100;
 
 type ResourceName = keyof typeof RESOURCES;
 
@@ -131,17 +143,18 @@ function describeResource(name: ResourceName) {
  * Для конструктора это важнее, чем краткость.
  */
 function odataHandler(name: ResourceName) {
-  const { entity, alias } = RESOURCES[name];
+  const resource: { entity: EntityTarget<ObjectLiteral>; alias: string; maxTop?: number } =
+    RESOURCES[name];
 
   return async (request: Request, response: Response) => {
     try {
       const result = await executeQuery(
-        dataSource.getRepository(entity),
+        dataSource.getRepository(resource.entity),
         request.query as unknown as QueryParams,
         {
-          alias,
+          alias: resource.alias,
           // Потолок страницы: демо открыто наружу, и без него один запрос вытянул бы всё.
-          maxTop: 100,
+          maxTop: resource.maxTop ?? DEFAULT_MAX_TOP,
         }
       );
 
