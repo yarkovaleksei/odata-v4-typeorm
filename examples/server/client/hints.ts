@@ -88,6 +88,10 @@ export function renderSchemaUnavailable(): void {
   ui.selectChips.innerHTML = '';
   ui.expandChips.innerHTML = '';
   ui.resourceHint.textContent = 'Схема недоступна: сервер не ответил на /api/$schema.';
+
+  // Потолок страницы приходит вместе со схемой; без неё ограничивать поле нечем.
+  form.top.removeAttribute('max');
+  ui.topHint.textContent = '';
 }
 
 /** Перерисовывает все подсказки под выбранную сущность. */
@@ -136,6 +140,14 @@ export function renderFieldHints(resource: SchemaResource, schema: SchemaResourc
   // Направление выбирается отдельным списком, поэтому здесь только имена — и свои,
   // и пути по связям: сортировать по полю связи (`author/name`) OData позволяет.
   fillDatalist(ui.orderbyOptions, [...fieldNames, ...relationPaths]);
+
+  // Потолок страницы у каждой сущности свой, и в разметке его быть не может: `maxTop`
+  // задаёт сервер (у `/api/reviews` он занижен до трёх, чтобы усечение было видно
+  // на пяти строках). Поэтому и сам `max`, и пояснение под полем берутся из схемы.
+  form.top.max = String(resource.maxTop);
+  ui.topHint.textContent =
+    `Потолок страницы — ${resource.maxTop}: запрос с бо́льшим $top не отвергается, ` +
+    'а усекается. Вместе с $count это видно в одном ответе — items короче count.';
 
   form.select.placeholder = fieldNames.slice(0, 2).join(',') || 'id';
   form.expand.placeholder = relationNames.slice(0, 2).join(',') || 'связей нет';

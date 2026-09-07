@@ -63,6 +63,7 @@ export const ui = {
   status: byId('status'),
   timing: byId('timing'),
   resourceHint: byId('resource-hint'),
+  topHint: byId('top-hint'),
   examples: byId('examples'),
   examplesResource: byId('examples-resource'),
   selectChips: byId('select-chips'),

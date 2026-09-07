@@ -117,9 +117,16 @@
           </div>
         </div>
 
+        <!--
+          У `max` здесь нет значения: потолок страницы задаёт сервер отдельно для каждой
+          сущности (`maxTop`), и страница проставляет его из ответа `/api/$schema` —
+          см. renderFieldHints. Зашитая в разметку сотня расходилась бы с /api/reviews,
+          где потолок занижен до трёх.
+        -->
         <div class="field">
           <label for="top">$top <span class="tag">кол-во записей на страницу</span></label>
-          <input id="top" type="number" min="0" max="100" placeholder="—" />
+          <input id="top" type="number" min="0" placeholder="—" />
+          <p class="hint" id="top-hint"></p>
         </div>
 
         <div class="field">
