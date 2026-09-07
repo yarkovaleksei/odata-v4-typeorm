@@ -366,7 +366,7 @@
                 }
               ]
             },
-            "description": "Срез связанных строк на каждого родителя. Выполняется после запроса, над деревом сущностей: ограничить их в одном SQL нельзя."
+            "description": "Срез связанных строк на каждого родителя. Обычным LIMIT это не выражается: в запросе с LEFT JOIN он действует на весь плоский результат, а не на группу строк одного родителя. Поэтому страницу вырезает оконная функция ROW_NUMBER() в условии соединения, и из базы поднимается только она. Там, где так нельзя (MySQL, незнакомый драйвер, вложенный $orderby по соседней связи, опция nestedPaginationInSql: false), библиотека возвращается к срезу над деревом сущностей — результат тот же."
           },
           "response": []
         },
@@ -376,7 +376,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/books?$select=id,title,author/name&$expand=author",
+              "raw": "{{base_url}}/api/books?$select=id,title,author/name",
               "host": [
                 "{{base_url}}"
               ],
@@ -388,14 +388,10 @@
                 {
                   "key": "$select",
                   "value": "id,title,author/name"
-                },
-                {
-                  "key": "$expand",
-                  "value": "author"
                 }
               ]
             },
-            "description": "Путь по связи прямо в $select."
+            "description": "Путь по связи прямо в $select: связь подключается сама, отдельный $expand не нужен, и в ответе у author остаётся только name. Добавлять при этом $expand=author не стоит — он затребует все колонки связи и перекроет сужение: получится author целиком."
           },
           "response": []
         }
@@ -518,7 +514,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/books?$filter=(not (id eq 1)) and id lt 4&$orderby=id asc",
+              "raw": "{{base_url}}/api/books?$filter=not (id eq 1) and id lt 4&$orderby=id asc",
               "host": [
                 "{{base_url}}"
               ],
@@ -529,7 +525,7 @@
               "query": [
                 {
                   "key": "$filter",
-                  "value": "(not (id eq 1)) and id lt 4"
+                  "value": "not (id eq 1) and id lt 4"
                 },
                 {
                   "key": "$orderby",
@@ -537,7 +533,7 @@
                 }
               ]
             },
-            "description": "Внешние скобки обязательны: парсер читает not (X) and Y как not (X and Y)."
+            "description": "not связывает сильнее, чем and и or, как требует спецификация (раздел 5.1.1.9): not (X) and Y читается как (not X) and Y, отрицание относится только к первому условию. Внешние скобки не нужны — запись (not (id eq 1)) and id lt 4 означает ровно то же самое."
           },
           "response": []
         },
