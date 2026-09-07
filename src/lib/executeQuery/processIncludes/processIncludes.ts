@@ -17,7 +17,8 @@
  */
 import type { DataSource, EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
 
-import type { TypeOrmVisitor } from '../../TypeOrmVisitor';
+import { type TypeOrmVisitor, VISITOR_DEFAULTS } from '../../TypeOrmVisitor';
+import { applyOrderBy } from '../applyOrderBy';
 import { mapToObject } from '../mapToObject';
 import { buildNestedPageCondition } from '../nestedPageCondition';
 
@@ -108,7 +109,7 @@ export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
       // - иначе → leftJoin + ручной addSelect только нужных колонок.
       // Отдельный случай — «виртуальный» include из фильтра по пути `связь/поле`: у него select === '',
       // он попадает в ветку leftJoin, addSelect получает пустой список и связь джойнится без выборки.
-      const join = item.select === '*' ? 'leftJoinAndSelect' : 'leftJoin';
+      const join = item.select === VISITOR_DEFAULTS.select ? 'leftJoinAndSelect' : 'leftJoin';
 
       if (join === 'leftJoin') {
         // filter(x => x !== '') нужен именно для случая select === '' (JOIN ради условия).
@@ -125,8 +126,11 @@ export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
         );
       }
 
-      // 'typeorm_query' — плейсхолдер, который базовый Visitor из odata-v4-sql подставляет
-      // как имя таблицы вложенного запроса. Здесь он меняется на реальное имя связи.
+      // 'typeorm_query' — плейсхолдер имени таблицы вложенного запроса, который подставлял
+      // базовый Visitor из odata-v4-sql. Собственный TypeOrmVisitor его больше не порождает:
+      // алиас связи он знает сам и пишет сразу (`Author_books.title`). Замена оставлена ради
+      // вызывающего кода, который строит посетителя вручную и мог на неё опираться, —
+      // на фрагментах из `createQuery` она не находит ничего.
       // Раскрывается один раз: те же фрагменты уходят и в ON, и в подзапрос пагинации.
       const fragments = {
         where: item.where.replace(/typeorm_query/g, item.navigationProperty),
@@ -156,23 +160,9 @@ export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
         on.parameters
       );
 
-      // '1' — orderby по умолчанию у базового посетителя, трактуется как «сортировка не задана».
-      if (fragments.orderby && fragments.orderby != '1') {
-        // Строка вида 'posts8.name ASC, posts8.created DESC'.
-        const orders: string[] = fragments.orderby.split(',').map((i: string) => i.trim());
-
-        orders.forEach((orderItem) => {
-          const [field, order] = orderItem.split(' ');
-
-          // Пустой сегмент возможен при лишней запятой во вложенном $orderby.
-          if (!field) {
-            return;
-          }
-
-          // addOrderBy, а не orderBy: сортировки корня и всех связей накапливаются в одном ORDER BY.
-          queryBuilder = queryBuilder.addOrderBy(field, order as 'ASC' | 'DESC');
-        });
-      }
+      // Сортировка связи дописывается после корневой и упорядочивает записи внутри
+      // каждого родителя. Строка вида 'Author_books.name ASC, Author_books.created DESC'.
+      queryBuilder = applyOrderBy(queryBuilder, fragments.orderby);
 
       // Рекурсия для вложенных $expand: `$expand=posts($expand=comments)`.
       if (item.includes && item.includes.length > 0) {

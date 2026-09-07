@@ -6,8 +6,7 @@
  * который ждёт голое булево выражение (`name eq 'Ann'`), а не строку query options
  * (`$filter=name eq 'Ann'`). Всё остальное — тот же `TypeOrmVisitor` и тот же формат результата.
  */
-import { ODataError, ODataParseError } from '../errors';
-import { parseFilter, type Token } from '../odataParser';
+import { parseFilter, parseOrThrow, type Token } from '../odataParser';
 import { TypeOrmVisitor } from '../TypeOrmVisitor';
 import type { SqlOptions } from '../types';
 
@@ -15,14 +14,16 @@ import type { SqlOptions } from '../types';
  * Строит объект `TypeOrmVisitor` с заполненным `where` (и связанными полями) из OData filter.
  *
  * Основной сценарий — «сырой» SQL мимо TypeORM: получить `where` + `parameters` и подставить их
- * в собственный запрос (см. `src/example/sql.ts`). Для TypeORM удобнее `executeQuery`.
+ * в собственный запрос (рецепт с драйвером `pg` — в `docs/recipes.md`, раздел «Без TypeORM:
+ * только компиляция в SQL»). Для TypeORM удобнее `executeQuery`.
  *
  * @param odataFilter - голое выражение фильтра (без префикса `$filter=`) или готовый AST.
  * @param options - опции SQL-генерации; `alias` задаёт префикс колонок. Передайте `''`,
  *   если префикс не нужен (запрос к одной таблице без алиаса).
- * @returns посетитель после полного обхода AST и `asType()`.
+ * @returns посетитель после полного обхода AST — готовый к использованию, никаких
+ *   дополнительных вызовов не требуется.
  *
- * @remarks Мутирует переданный объект `options` (проставляет `type`).
+ * @remarks Переданный объект `options` не мутируется: конструктор посетителя работает с копией.
  * @throws {ODataParseError} выражение синтаксически некорректно.
  * @throws {ODataUnsupportedError} выражение разобрано, но содержит конструкцию без трансляции в SQL.
  *
@@ -35,23 +36,8 @@ import type { SqlOptions } from '../types';
  */
 export function createFilter(odataFilter: string | Token, options: SqlOptions): TypeOrmVisitor {
   const visitor = new TypeOrmVisitor(options);
-  const ast: Token = typeof odataFilter === 'string' ? parseOrThrow(odataFilter) : odataFilter;
+  const ast: Token =
+    typeof odataFilter === 'string' ? parseOrThrow(odataFilter, parseFilter) : odataFilter;
 
   return visitor.Visit(ast);
-}
-
-/**
- * Разбор выражения с приведением ошибки парсера к типизированной — см. одноимённую
- * функцию в `createQuery`.
- */
-function parseOrThrow(odataFilter: string): Token {
-  try {
-    return parseFilter(odataFilter);
-  } catch (e) {
-    if (e instanceof ODataError) {
-      throw e;
-    }
-
-    throw new ODataParseError(odataFilter, e);
-  }
 }

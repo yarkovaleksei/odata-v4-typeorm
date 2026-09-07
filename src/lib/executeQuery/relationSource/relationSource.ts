@@ -19,6 +19,7 @@
 import type { DataSource, EntityMetadata } from 'typeorm';
 
 import type { RelationResolver } from '../../types';
+import { createEscape, escapeTablePath } from '../sqlIdentifier';
 
 /** Метаданные связи. Тип выводится из `EntityMetadata`, а не берётся глубоким импортом. */
 type RelationMetadata = EntityMetadata['relations'][number];
@@ -33,12 +34,42 @@ export interface ResolvedRelation {
   metadata: EntityMetadata;
 }
 
-/** Имя таблицы с учётом схемы: `public.book` экранируется посегментно. */
-function escapeTablePath(connection: DataSource, tablePath: string): string {
-  return tablePath
-    .split('.')
-    .map((segment) => connection.driver.escape(segment))
-    .join('.');
+/**
+ * Стороны связи «многие ко многим», приведённые к направлению текущего запроса.
+ *
+ * Владеющая сторона объявлена ровно одна, и колонки таблицы связей описаны относительно неё:
+ * `joinColumns` смотрят на владельца, `inverseJoinColumns` — на другую сущность. Если запрос
+ * идёт с обратной стороны (`Tag.books` против `Book.tags`), роли меняются местами.
+ *
+ * Вынесено из обоих потребителей — подзапроса по связи здесь и окна вложенной пагинации
+ * в `nestedPageCondition`: перепутать `parentSide` с `childSide` значит соединить таблицу
+ * связей не тем концом и получить молча неверную выборку, а не ошибку.
+ *
+ * @returns `undefined`, если метаданных не хватает: владеющей стороны нет, таблица связей
+ *   не построена либо какая-то из сторон осталась без колонок.
+ */
+export function manyToManySides(relation: RelationMetadata):
+  | {
+      junction: EntityMetadata;
+      parentSide: RelationMetadata['joinColumns'];
+      childSide: RelationMetadata['joinColumns'];
+    }
+  | undefined {
+  const owning = relation.isOwning ? relation : relation.inverseRelation;
+  const junction = relation.junctionEntityMetadata;
+
+  if (!owning || !junction) {
+    return undefined;
+  }
+
+  const parentSide = relation.isOwning ? owning.joinColumns : owning.inverseJoinColumns;
+  const childSide = relation.isOwning ? owning.inverseJoinColumns : owning.joinColumns;
+
+  if (parentSide.length === 0 || childSide.length === 0) {
+    return undefined;
+  }
+
+  return { junction, parentSide, childSide };
 }
 
 /**
@@ -57,7 +88,7 @@ function step(
   parentAlias: string,
   childAlias: string
 ): { tables: string[]; conditions: string[] } | undefined {
-  const escape = (name: string) => connection.driver.escape(name);
+  const escape = createEscape(connection);
   const target = relation.inverseEntityMetadata;
   const childTable = `${escapeTablePath(connection, target.tablePath)} ${escape(childAlias)}`;
 
@@ -104,22 +135,13 @@ function step(
   }
 
   if (relation.isManyToMany) {
-    const owning = relation.isOwning ? relation : relation.inverseRelation;
-    const junction = relation.junctionEntityMetadata;
+    const sides = manyToManySides(relation);
 
-    if (!owning || !junction) {
+    if (!sides) {
       return undefined;
     }
 
-    // Колонки таблицы связей описаны относительно владеющей стороны; если запрос идёт
-    // с обратной стороны, роли меняются местами.
-    const parentSide = relation.isOwning ? owning.joinColumns : owning.inverseJoinColumns;
-    const childSide = relation.isOwning ? owning.inverseJoinColumns : owning.joinColumns;
-
-    if (parentSide.length === 0 || childSide.length === 0) {
-      return undefined;
-    }
-
+    const { junction, parentSide, childSide } = sides;
     const junctionAlias = `${childAlias}__jt`;
     const conditions: string[] = [];
 
@@ -233,7 +255,7 @@ export function createRelationResolver(
       return undefined;
     }
 
-    const escape = (name: string) => connection.driver.escape(name);
+    const escape = createEscape(connection);
 
     return {
       from: resolved.from,

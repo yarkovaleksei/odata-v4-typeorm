@@ -55,7 +55,9 @@
 import type { DataSource, EntityMetadata } from 'typeorm';
 
 import { normalizeDialect, supportsNestedPagePushdown } from '../../dialect';
-import type { TypeOrmVisitor } from '../../TypeOrmVisitor';
+import { type TypeOrmVisitor, VISITOR_DEFAULTS } from '../../TypeOrmVisitor';
+import { manyToManySides } from '../relationSource';
+import { createEscape, escapeTablePath } from '../sqlIdentifier';
 
 /** Метаданные связи. Берутся из `EntityMetadata`, а не глубоким импортом: см. `ColumnMetadata`. */
 type RelationMetadata = EntityMetadata['relations'][number];
@@ -119,18 +121,6 @@ function referencesOnly(fragment: string, alias: string): boolean {
   return true;
 }
 
-/**
- * Имя таблицы с учётом схемы: `public.book` экранируется посегментно.
- *
- * Экранировать `tablePath` целиком нельзя — получилось бы одно имя `"public.book"`.
- */
-function escapeTablePath(connection: DataSource, tablePath: string): string {
-  return tablePath
-    .split('.')
-    .map((segment) => connection.driver.escape(segment))
-    .join('.');
-}
-
 /** Строит источник строк для связи «один ко многим»: внешний ключ лежит в самой связанной таблице. */
 function oneToManySource(
   connection: DataSource,
@@ -138,7 +128,7 @@ function oneToManySource(
   parentAlias: string,
   childAlias: string
 ): WindowSource | undefined {
-  const escape = (name: string) => connection.driver.escape(name);
+  const escape = createEscape(connection);
   const inverse = relation.inverseRelation;
 
   // У `OneToMany` обратная сторона обязана существовать — связь объявляется парой.
@@ -172,9 +162,9 @@ function oneToManySource(
 /**
  * Строит источник строк для связи «многие ко многим»: нумеровать нужно строки таблицы связей.
  *
- * Владеющая сторона объявлена ровно одна, и колонки соединения описаны относительно неё:
- * `joinColumns` смотрят на владельца, `inverseJoinColumns` — на другую сущность. Если запрос
- * идёт с обратной стороны (`Tag.books`), роли меняются местами.
+ * Какая сторона таблицы связей смотрит на родителя, а какая на потомка, определяет общий
+ * с `relationSource` помощник {@link manyToManySides}: правило одно и то же, а ошибка в нём
+ * даёт не отказ, а молча неверную выборку.
  */
 function manyToManySource(
   connection: DataSource,
@@ -182,21 +172,14 @@ function manyToManySource(
   parentAlias: string,
   childAlias: string
 ): WindowSource | undefined {
-  const escape = (name: string) => connection.driver.escape(name);
-  const owning = relation.isOwning ? relation : relation.inverseRelation;
-  const junction = relation.junctionEntityMetadata;
+  const escape = createEscape(connection);
+  const sides = manyToManySides(relation);
 
-  if (!owning || !junction) {
+  if (!sides) {
     return undefined;
   }
 
-  const parentSide = relation.isOwning ? owning.joinColumns : owning.inverseJoinColumns;
-  const childSide = relation.isOwning ? owning.inverseJoinColumns : owning.joinColumns;
-
-  if (parentSide.length === 0 || childSide.length === 0) {
-    return undefined;
-  }
-
+  const { junction, parentSide, childSide } = sides;
   const parentColumns = referencedParentColumns(connection, parentSide, parentAlias);
 
   if (!parentColumns) {
@@ -250,7 +233,7 @@ function referencedParentColumns(
   joinColumns: readonly JoinColumnMetadata[],
   parentAlias: string
 ): string[] | undefined {
-  const escape = (name: string) => connection.driver.escape(name);
+  const escape = createEscape(connection);
   const columns: string[] = [];
 
   for (const column of joinColumns) {
@@ -317,12 +300,12 @@ export function buildNestedPageCondition(
   }
 
   const childAlias = include.alias;
-  const escape = (name: string) => connection.driver.escape(name);
+  const escape = createEscape(connection);
 
   // Вложенный `$filter` и `$orderby` попадут внутрь подзапроса как есть, поэтому обязаны
   // ссылаться только на саму связь — алиасов соседних JOIN'ов там не существует.
-  const where = fragments.where === '1 = 1' ? '' : fragments.where;
-  const orderby = fragments.orderby === '1' ? '' : fragments.orderby;
+  const where = fragments.where === VISITOR_DEFAULTS.where ? '' : fragments.where;
+  const orderby = fragments.orderby === VISITOR_DEFAULTS.orderby ? '' : fragments.orderby;
 
   if (!referencesOnly(where, childAlias) || !referencesOnly(orderby, childAlias)) {
     return undefined;

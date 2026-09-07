@@ -33,6 +33,7 @@ import { ODataUnsupportedError } from '../errors';
 import { convertLiteral, literalToSql } from '../literal';
 import { type Token, TokenType } from '../odataParser';
 import type { RelationSource, SqlDialect, SqlOptions } from '../types';
+import { VISITOR_DEFAULTS } from './defaults';
 
 /** Строковые поля посетителя, в которые ветки обхода дописывают SQL. */
 type TargetField = 'where' | 'select' | 'orderby';
@@ -247,8 +248,8 @@ export class TypeOrmVisitor {
    * пагинацию в форме `OFFSET … ROWS FETCH NEXT … ROWS ONLY`.
    *
    * В сценарии с TypeORM этот метод не используется — QueryBuilder собирает SQL сам из
-   * `select` / `where` / `parameters`. `from()` нужен для «сырого» сценария (`createFilter` +
-   * драйвер БД, см. `src/example/sql.ts`).
+   * `select` / `where` / `parameters`. `from()` нужен для «сырого» сценария (`createQuery` +
+   * драйвер БД; рецепт с `pg` — в `docs/recipes.md`, раздел «Без TypeORM: только компиляция в SQL»).
    *
    * @param table - имя таблицы; подставляется в SQL как есть, без экранирования, поэтому
    *   передавать сюда пользовательский ввод нельзя.
@@ -527,11 +528,11 @@ export class TypeOrmVisitor {
       // дописал бы SQL к ним: `$expand=books($orderby=id)` дал бы '1Author_books.id'.
       // Накопленный $select при этом сохраняется — так повторный $expand одной связи
       // объединяется в один JOIN с общим списком колонок.
-      if (visitor.where === '1 = 1') {
+      if (visitor.where === VISITOR_DEFAULTS.where) {
         visitor.where = '';
       }
 
-      if (visitor.orderby === '1') {
+      if (visitor.orderby === VISITOR_DEFAULTS.orderby) {
         visitor.orderby = '';
       }
 
@@ -555,15 +556,15 @@ export class TypeOrmVisitor {
    */
   private applyDefaults(): void {
     if (!this.select) {
-      this.select = '*';
+      this.select = VISITOR_DEFAULTS.select;
     }
 
     if (!this.where) {
-      this.where = '1 = 1';
+      this.where = VISITOR_DEFAULTS.where;
     }
 
     if (!this.orderby) {
-      this.orderby = '1';
+      this.orderby = VISITOR_DEFAULTS.orderby;
     }
   }
 
@@ -711,7 +712,7 @@ export class TypeOrmVisitor {
     visitor.parameterSeed = this.parameterSeed;
     visitor.navigationProperty = navigationProperty;
     visitor.select = '';
-    visitor.where = '1 = 1';
+    visitor.where = VISITOR_DEFAULTS.where;
 
     // orderby намеренно остаётся пустым, а не '1': если до этой связи доберётся
     // `$expand=...($orderby=…)`, разбор допишет сортировку к содержимому поля.
@@ -756,8 +757,9 @@ export class TypeOrmVisitor {
   /**
    * Скобочная группа в арифметическом выражении: `(age add 4) mul 2`.
    *
-   * Отличается от `VisitBoolParenExpression` (он в базовом классе) тем, что группирует
-   * не булево подвыражение, а арифметическое.
+   * Отличается от {@link TypeOrmVisitor.VisitBoolParenExpression} тем, что группирует
+   * не булево подвыражение, а арифметическое. Какой из двух узлов построить, решает парсер
+   * по типу содержимого скобок.
    */
   protected VisitParenExpression(node: Token, context: Context) {
     this.append(context, '(');

@@ -44,6 +44,7 @@ import { ODataInvalidQueryError } from '../../errors';
 import type { QueryParams } from '../../types';
 import { parseSearch, type SearchNode } from '../parseSearch';
 import { buildRelationSource } from '../relationSource';
+import { createEscape } from '../sqlIdentifier';
 
 /**
  * Имена типов колонок TypeORM/БД, для которых допустим поиск подстроки через `LIKE`.
@@ -151,7 +152,7 @@ function resolveField(
   path: string,
   index: number
 ): SearchTarget {
-  const escape = (name: string) => connection.driver.escape(name);
+  const escape = createEscape(connection);
   const segments = path.split('/');
   const field = segments.pop() as string;
 
@@ -194,7 +195,7 @@ function rootTargets(
   metadata: EntityMetadata,
   alias: string
 ): SearchTarget[] {
-  const escape = (name: string) => connection.driver.escape(name);
+  const escape = createEscape(connection);
   const targets: SearchTarget[] = [];
 
   for (const column of metadata.columns) {

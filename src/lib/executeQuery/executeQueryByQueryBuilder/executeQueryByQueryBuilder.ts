@@ -19,8 +19,9 @@ import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm'
 
 import { createQuery } from '../../createQuery';
 import { ODataInvalidQueryError } from '../../errors';
-import type { TypeOrmVisitor } from '../../TypeOrmVisitor';
+import { type TypeOrmVisitor, VISITOR_DEFAULTS } from '../../TypeOrmVisitor';
 import { applyNestedPagination } from '../applyNestedPagination';
+import { applyOrderBy } from '../applyOrderBy';
 import type { QueryParams } from '../../types';
 import { mapToObject } from '../mapToObject';
 import { processIncludes } from '../processIncludes';
@@ -299,10 +300,8 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   let rootSelect: string[];
 
   // Определяем, какие поля корневой сущности выбирать.
-  // NB: `Object.keys(odataQuery).length === 0` — мёртвое условие: odataQuery всегда экземпляр
-  // класса TypeOrmVisitor с собственными полями, пустым он не бывает. Реально работает вторая
-  // половина: `select === '*'` — это значение базового посетителя, означающее «$select не задан».
-  if (Object.keys(odataQuery).length === 0 || odataQuery.select === '*') {
+  // `select === '*'` — значение посетителя по умолчанию, означающее «$select не задан».
+  if (odataQuery.select === VISITOR_DEFAULTS.select) {
     // $select не задан: берём все невыбираемые-по-умолчанию колонки корня.
     //
     // nonVirtualColumns исключает вычисляемые поля (@VirtualColumn), для которых нет столбца в БД.
@@ -334,27 +333,7 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // Раньше processIncludes шёл раньше, и `$expand=books($orderby=id)&$orderby=id` давал
   // `ORDER BY Author_books.id, Author.id` — авторы без книг всплывали наверх (у них NULL),
   // то есть корневой `$orderby` переставал работать. См. `docs/audit.md`, дефект A-14.
-  //
-  // '1' — значение orderby по умолчанию у базового посетителя (SQL `ORDER BY 1`),
-  // здесь оно трактуется как «$orderby не задан».
-  if (odataQuery.orderby && odataQuery.orderby !== '1') {
-    const orders: string[] = odataQuery.orderby.split(',').map((i: string) => i.trim());
-
-    orders.forEach((orderItem) => {
-      // Посетитель нормализует направление к верхнему регистру, так что split по пробелу
-      // даёт ['user.name', 'ASC']. Для поля без направления order будет undefined —
-      // TypeORM в этом случае подставит ASC.
-      const [field, order] = orderItem.split(' ');
-
-      // Пустой сегмент возможен при лишней запятой в $orderby; добавлять его в ORDER BY
-      // нельзя — получится синтаксическая ошибка SQL.
-      if (!field) {
-        return;
-      }
-
-      queryBuilder = queryBuilder.addOrderBy(field, order as 'ASC' | 'DESC');
-    });
-  }
+  queryBuilder = applyOrderBy(queryBuilder, odataQuery.orderby);
 
   // Разворачиваем дерево includes в LEFT JOIN'ы ($expand); сортировки связей допишутся
   // после корневой и будут упорядочивать записи внутри каждого родителя.
