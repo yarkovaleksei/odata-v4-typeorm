@@ -26,13 +26,16 @@ import * as path from 'path';
 import express, { type Request, type Response } from 'express';
 import type { EntityTarget, ObjectLiteral } from 'typeorm';
 
+// Библиотека берётся из исходников, а не по имени пакета: по имени Node разрешил бы её
+// через собственный `exports` в `build/`, и демо показывало бы прошлую сборку — см.
+// пояснение в `examples/server/tsconfig.json`.
 import {
   executeQuery,
   isODataClientError,
   ODataMetadataMiddleware,
   resolveEdmType,
   type QueryParams,
-} from 'odata-v4-typeorm-improved';
+} from '../../../src/lib';
 
 import {
   Author,
@@ -252,7 +255,7 @@ export async function start(): Promise<void> {
   });
 }
 
-// Прямой запуск (`yarn serve`), а не импорт.
+// Прямой запуск (`yarn server`), а не импорт.
 if (require.main === module) {
   start().catch((error) => {
     console.error('Не удалось запустить демо-сервер:', error);
