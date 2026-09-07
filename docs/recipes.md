@@ -353,6 +353,151 @@ export class UsersController {
 
 ---
 
+## Настройка `$search`
+
+По умолчанию `$search` ищет по **всем скалярным колонкам корня**: текстовым по подстроке,
+числовым по точному равенству. Для публичного API это почти всегда не то, что нужно, —
+перечислите поля явно:
+
+```ts
+const result = await executeQuery(dataSource.getRepository(Book), req.query, {
+  alias: 'Book',
+  // пути от корня; можно идти через связи
+  searchFields: ['title', 'author/name'],
+});
+```
+
+Поле связи (`'author/name'`) компилируется в `EXISTS`, поэтому число корневых строк
+не меняется и `$top` продолжает означать «столько-то книг».
+
+Выражение поиска разбирается по грамматике OData целиком — скобки, `AND`, `OR`, `NOT`
+и фразы в кавычках:
+
+```bash
+GET /api/books?$search=ada
+GET /api/books?$search=ada OR hopper
+GET /api/books?$search="grace hopper" NOT compiler
+GET /api/books?$search=(ada OR grace) AND algorithm
+```
+
+### Полнотекстовый режим
+
+`'like'` (по умолчанию) находит середину слова, но не пользуется индексами — каждый запрос
+сканирует таблицу. `'fulltext'` переключает сравнение на полнотекстовый поиск СУБД: ищет
+слова целиком, зато опирается на индекс.
+
+```ts
+const result = await executeQuery(dataSource.getRepository(Book), req.query, {
+  alias: 'Book',
+  searchFields: ['title', 'description'],
+  searchMode: 'fulltext',
+  // словарь словоформ PostgreSQL: с 'simple' найдётся только точное слово,
+  // с 'russian' — все его формы. Должен совпадать с языком в индексе.
+  searchLanguage: 'russian',
+});
+```
+
+Индекс под этот режим:
+
+```sql
+-- PostgreSQL: язык обязан совпадать с searchLanguage, иначе индекс не используется
+CREATE INDEX book_title_fts ON book USING GIN (to_tsvector('russian', title));
+
+-- MySQL: без индекса СУБД просто отвергнет запрос
+ALTER TABLE book ADD FULLTEXT INDEX book_title_fts (title, description);
+```
+
+> На SQLite и MS SQL режим молча остаётся `'like'`: там полнотекстовый поиск требует
+> отдельной виртуальной таблицы или каталога. Один и тот же код работает на SQLite
+> в разработке и на PostgreSQL в продакшене — падать на этом различии он не должен.
+
+---
+
+## Фильтры по коллекциям: `any` и `all`
+
+Лямбда-операторы отвечают на вопрос «есть ли в коллекции запись, для которой…», не размножая
+корневые строки:
+
+```bash
+# у автора есть хотя бы одна книга длиннее 400 страниц
+GET /api/authors?$filter=books/any(b: b/pages gt 400)
+
+# все книги автора длиннее 200 страниц (для автора без книг — истина)
+GET /api/authors?$filter=books/all(b: b/pages gt 200)
+
+# книги вообще есть
+GET /api/authors?$filter=books/any()
+
+# путь до коллекции может быть составным, а лямбды — вкладываться
+GET /api/authors?$filter=books/reviews/any(r: r/score eq 5)
+GET /api/authors?$filter=books/any(b: b/reviews/any(r: r/score eq 5))
+
+# внутри тела доступен и внешний уровень: имя без переменной относится к корню
+GET /api/authors?$filter=books/any(b: b/title eq name)
+```
+
+Оба разворачиваются в `EXISTS` / `NOT EXISTS`, а не в соединение, — поэтому их можно
+свободно сочетать с `$top` и `$count`:
+
+```sql
+-- books/any(b: b/pages gt 400)
+EXISTS (SELECT 1 FROM "book" "Author_books_b"
+         WHERE "Author_books_b"."author_id" = "Author"."id" AND ("Author_books_b"."pages" > :p0))
+```
+
+Белый список `allowedExpands` видит связи, пройденные лямбдой, хотя JOIN они не создают:
+
+```ts
+// $filter=books/any(...) пройдёт, $filter=sessions/any(...) — нет
+await executeQuery(repo, req.query, { alias: 'Author', allowedExpands: ['books'] });
+```
+
+> Лямбдам нужны метаданные сущности, чтобы назвать таблицу подзапроса. `executeQuery`
+> подставляет их сам; при прямом вызове `createFilter` без `resolveRelation` лямбда
+> отвергается `ODataUnsupportedError`.
+
+---
+
+## Вложенная пагинация внутри `$expand`
+
+`$top` и `$skip` внутри `$expand` ограничивают коллекцию **каждого** родителя отдельно:
+
+```bash
+# по три последних поста на каждого пользователя
+GET /api/users?$expand=posts($orderby=createdAt desc;$top=3)
+
+# со второго по четвёртый
+GET /api/users?$expand=posts($orderby=id;$top=3;$skip=1)
+```
+
+Обычным `LIMIT` это не выражается: в запросе с `LEFT JOIN` он действует на весь плоский
+результат, а не на группу строк одного родителя. Поэтому страницу вырезает оконная функция
+в условии соединения, и из базы поднимается только она.
+
+Там, где перенести срез в SQL нельзя, библиотека сама возвращается к срезу над деревом
+загруженных сущностей — результат тот же, но связанные строки приходят из базы целиком:
+
+| Случай | Почему |
+|---|---|
+| MySQL | Считает окно после наложения внешнего условия и молча возвращает не ту страницу |
+| Незнакомый драйвер (`'ansi'`) | Оконных функций может не быть вовсе |
+| Вложенный `$orderby` по соседней связи | Её алиаса в подзапросе не существует |
+| `nestedPaginationInSql: false` | Перенос выключен явно |
+
+```ts
+// вернуться к прежнему поведению: срез в памяти, запрос проще
+const result = await executeQuery(repo, req.query, {
+  alias: 'User',
+  nestedPaginationInSql: false,
+});
+```
+
+> Выключать имеет смысл на СУБД без оконных функций, которую библиотека не распознала
+> (MySQL 5.7, MariaDB 10.1 — обе сняты с поддержки), либо при неудачном плане запроса
+> на конкретных данных.
+
+---
+
 ## Без TypeORM: только компиляция в SQL
 
 `createQuery` и `createFilter` к базе не обращаются — они возвращают фрагменты SQL и карту
@@ -545,36 +690,38 @@ curl "http://localhost:3001/api/users?\$filter=name%20eq%20'Alice'"
 
 ## Чего делать не стоит
 
-**Ставьте явные скобки вокруг `not`.** Парсер разбирает `not (X) and Y` как `not (X and Y)` —
-приоритет ниже, чем требует спецификация:
+**Для условий по коллекции берите лямбду, а не путь связи.** Обе записи разбираются, но
+компилируются по-разному: `posts/title eq 'x'` даёт `LEFT JOIN`, а он размножает корневые
+строки — пользователь с тремя подходящими постами вернётся трижды, и `$top=10` отдаст
+не десять пользователей. `posts/any(…)` разворачивается в `EXISTS` и число строк не меняет:
 
 ```bash
-# ❌ читается как not (X and Y) — вернёт не то, что вы ожидаете
-GET /api/users?$filter=not (name eq 'Alice') and id gt 10
+# ❌ дубли пользователей, $top считает не то
+GET /api/users?$filter=posts/title eq 'x'
 
-# ✅ явные внешние скобки задают нужную группировку
-GET /api/users?$filter=(not (name eq 'Alice')) and id gt 10
-
-# ✅ либо поставьте not последним
-GET /api/users?$filter=id gt 10 and not (name eq 'Alice')
+# ✅ EXISTS — по одной строке на пользователя
+GET /api/users?$filter=posts/any(p: p/title eq 'x')
 ```
 
-**Не рассчитывайте на `in` и лямбды `any` / `all`** — их не разбирает парсер, запрос будет
-отвергнут с `ODataUnsupportedError`:
+Для связи «многие к одному» (`$filter=author/name eq 'Ada'`) путь безопасен: там одна
+связанная запись, дублей не возникает.
+
+**Не тащите связь через тело лямбды.** Внутри тела допустим только путь `переменная/поле`;
+`b/author/name` потребовал бы ещё одного соединения внутри подзапроса и отвергается
+`ODataUnsupportedError`. Тот же смысл выражается вложенной лямбдой:
 
 ```bash
 # ❌ ODataUnsupportedError
-GET /api/users?$filter=posts/any(p: p/title eq 'x')
+GET /api/authors?$filter=books/any(b: b/reviews/score gt 4)
 
-# ✅ фильтр по пути связи — семантика близка к any
-GET /api/users?$filter=posts/title eq 'x'
-
-# ❌ Unexpected character
-GET /api/users?$filter=id in (1,2,3)
-
-# ✅ разверните в or
-GET /api/users?$filter=id eq 1 or id eq 2 or id eq 3
+# ✅ вложенная лямбда
+GET /api/authors?$filter=books/any(b: b/reviews/any(r: r/score gt 4))
 ```
+
+**Не оставляйте `$search` по всем колонкам на публичном API.** Без `searchFields` поиск идёт
+по всем скалярным колонкам корня — клиент перебором строки поиска выясняет содержимое полей,
+которые вы не собирались показывать, и каждый запрос сканирует таблицу целиком.
+См. [Настройка `$search`](#настройка-search).
 
 **Не оставляйте `$top` неограниченным на публичном API.** По умолчанию потолка нет:
 

@@ -90,7 +90,7 @@ const total = Array.isArray(result) ? result.length : result.count;
 | Ошибка | Причина | HTTP |
 |---|---|---|
 | `ODataParseError` | Синтаксически некорректный OData-параметр | `400` |
-| `ODataUnsupportedError` | Конструкция вне поддерживаемого подмножества (`in`, `any`/`all`, `replace`, геофункции) | `400` |
+| `ODataUnsupportedError` | Конструкция вне поддерживаемого подмножества (`replace`, `cast`, `isof`, геофункции, `$apply`) | `400` |
 | `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка | `400` |
 | `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются | `400` |
 | `EntityMetadataNotFoundError` | У построителя нет метаданных и `alias` не соответствует сущности | `500` |
@@ -513,16 +513,9 @@ interface GetManyResponse<T extends ObjectLiteral> {
 Возвращается только при `$count=true`. Без `$count` ответ — обычный `T[]`, поэтому
 результат `executeQuery` имеет тип `T[] | GetManyResponse<T>` и требует сужения.
 
-### `SqlOptions`
+### `SqlDialect`
 
 ```ts
-interface SqlOptions extends BaseSqlOptions {
-  alias: string;            // префикс колонок и ключ поиска метаданных
-  dialect?: SqlDialect | string; // целевая СУБД; определяет выбор SQL-функций
-  useParameters?: boolean;  // по умолчанию true — литералы идут в parameters, а не в SQL
-  type?: SQLLang;           // перезаписывается принудительно, передавать бессмысленно
-}
-
 type SqlDialect = 'postgres' | 'mysql' | 'sqlite' | 'mssql' | 'oracle' | 'ansi';
 ```
 
@@ -578,14 +571,19 @@ queryToOdataString({ $top: 5, $filter: "name eq 'Ann'", page: 2 });
 mapToObject(new Map([['p0', 'Ann'], ['p1', 18]]));  // → { p0: 'Ann', p1: 18 }
 ```
 
-### `processIncludes(qb, odataQuery, alias, parentMetadata): SelectQueryBuilder`
+### `processIncludes(qb, odataQuery, alias, parentMetadata, nested?): SelectQueryBuilder`
 
-Разворачивает `includes` в `LEFT JOIN`. Вложенные `$top` / `$skip` внутри `$expand` игнорируются.
+Разворачивает `includes` в `LEFT JOIN`. Вложенные `$top` / `$skip` переносятся в SQL
+оконной функцией в условии соединения, если передан аргумент `nested`; связи, страницу
+которых вырезал SQL, складываются в `nested.paginated`, чтобы `applyNestedPagination`
+не применил срез второй раз.
 
-### `processSearch(qb, metadata, $search, alias): void`
+### `processSearch(qb, metadata, $search, alias, options?): void`
 
 Добавляет условия `$search`. Мутирует построитель на месте, ничего не возвращает.
-Работает только по колонкам корневой сущности.
+По умолчанию ищет по всем скалярным колонкам корня; `options.fields` сужает набор и
+допускает пути через связи (`'author/name'`), `options.mode` переключает сравнение
+на полнотекстовое.
 
 ### Списки типов колонок для `$search`
 
