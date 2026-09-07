@@ -1,0 +1,406 @@
+/*
+ * Оформление конструктора запросов.
+ *
+ * Без сборки и без внешних зависимостей: страницу отдаёт express статикой, и она
+ * должна открываться сразу после `yarn server`, без установки чего-либо ещё.
+ *
+ * ТЕМА. По умолчанию берётся системная, кнопка в шапке переключает её вручную.
+ * Обе пары цветов записаны одним токеном через `light-dark()`, а выбор темы меняет
+ * единственное свойство — `color-scheme` на корне. Второй блок с тёмной палитрой
+ * не нужен: медиазапрос и селектор `[data-theme]` не умеют делить один набор
+ * объявлений, и переписывать десять токенов дважды пришлось бы вручную.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#f6f7f9, #14171b);
+  --panel: light-dark(#ffffff, #1c2026);
+  --border: light-dark(#d8dce3, #2f353d);
+  --text: light-dark(#1b1f24, #e6e9ed);
+  --muted: light-dark(#616a75, #9aa4b0);
+  --accent: light-dark(#2f6feb, #58a6ff);
+  --accent-contrast: light-dark(#ffffff, #0d1117);
+  --code-bg: light-dark(#eef1f5, #23282f);
+  --ok: light-dark(#1a7f37, #3fb950);
+  --error: light-dark(#c4351b, #f85149);
+  --radius: 8px;
+}
+
+/* Явный выбор пользователя: атрибут ставит скрипт, дальше всё решает `light-dark()`. */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    15px/1.5 system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+code,
+input,
+textarea,
+select,
+.output,
+.url {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.page-header {
+  max-width: 1200px;
+  margin: 0 auto 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* Кнопка темы прижата к правому краю шапки и не сжимает заголовок с описанием. */
+.theme-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--muted);
+  max-width: 70ch;
+}
+
+.layout {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(340px, 1.1fr);
+  grid-template-areas:
+    'builder result'
+    'examples result';
+  gap: 16px;
+  align-items: start;
+}
+
+.builder {
+  grid-area: builder;
+}
+
+.result {
+  grid-area: result;
+  position: sticky;
+  top: 24px;
+}
+
+.examples {
+  grid-area: examples;
+}
+
+/* Одна колонка на узких экранах: sticky-панель там только мешает. */
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'builder' 'result' 'examples';
+  }
+
+  .result {
+    position: static;
+  }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+/*
+ * Строка из нескольких элементов одного поля — сейчас это `$orderby`: имя поля
+ * и направление. Направление стоит рядом с полем, а не отдельным параметром формы,
+ * потому что и в запросе оно часть одного выражения (`name desc`).
+ */
+.field-row {
+  display: flex;
+  gap: 10px;
+}
+
+.field-row > input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Ширина по содержимому: направлений всего два, растягивать список не на что. */
+.field-row > select {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.tag--error {
+  color: var(--error);
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+}
+
+.checkbox input {
+  width: auto;
+}
+
+/*
+ * Подсказки с именами полей и связей выбранной сущности.
+ *
+ * Не просто список: нажатие добавляет имя в поле ввода или убирает его оттуда, поэтому
+ * это кнопки, а не span. Собрать `$select` из семи колонок мышкой быстрее, чем набрать
+ * их без опечаток.
+ */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Связь, возвращающая массив: в $expand она ведёт себя иначе, чем одиночная. */
+.chip--collection::after {
+  margin-left: 4px;
+  content: '[]';
+  opacity: 0.6;
+}
+
+.chip--active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.hint {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  font-size: 11px;
+}
+
+ul.hint {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+button {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+.url-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.url {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  font-size: 12px;
+  /* URL длинный и его надо читать целиком — переносим по любым символам. */
+  overflow-wrap: anywhere;
+}
+
+.url-row button {
+  white-space: nowrap;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+
+.status {
+  padding: 2px 9px;
+  border-radius: 10px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Нейтральное состояние: запрос ещё не выполнялся либо выполняется. */
+.status--idle {
+  color: var(--muted);
+}
+
+.status--ok {
+  color: var(--ok);
+}
+
+.status--error {
+  color: var(--error);
+}
+
+.timing {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.output {
+  margin: 0;
+  padding: 12px;
+  max-height: 460px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.examples-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.examples-list button {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.examples-list .example-title {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.examples-list .example-query {
+  display: block;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}

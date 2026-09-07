@@ -1,87 +1,264 @@
-import express from 'express';
-import { ODataQueryMiddleware } from '../../../src/lib';
-import { getConnection, getRepository, type EntityTarget, type ObjectLiteral } from 'typeorm';
+/**
+ * @file Демо-сервер: OData-эндпоинты поверх TypeORM плюс интерактивный конструктор запросов.
+ *
+ * Запуск одной командой из корня репозитория:
+ *
+ * ```bash
+ * yarn server
+ * ```
+ *
+ * После старта:
+ * - `http://localhost:3001/` — страница-конструктор: собрать запрос мышкой и увидеть ответ;
+ * - `http://localhost:3001/api/books` — сам OData-эндпоинт;
+ * - `http://localhost:3001/api/$metadata` — схема сервиса в CSDL XML, как её ждут
+ *   клиенты OData (`ra-data-odata-server`, `@odata/client`, Excel);
+ * - `http://localhost:3001/api/books/$schema` — список полей и связей сущности в JSON.
+ *
+ * ПРО ДВА РАЗНЫХ ОПИСАНИЯ СХЕМЫ. `$metadata` — стандартный путь OData, и по нему обязан
+ * лежать документ CSDL XML: клиенты разбирают его как XML и на JSON не рассчитывают.
+ * Конструктору же нужна не модель OData, а собственная выжимка (имена полей для подсказок),
+ * поэтому она вынесена на `$schema` — путь, которого в спецификации нет и который ни с чем
+ * не спутаешь.
+ */
+import { execFileSync } from 'child_process';
+import * as path from 'path';
 
-import { Author } from './entities/author';
-import { Post } from './entities/post';
-import { PostCategory } from './entities/postCategory';
-import { PostDetails } from './entities/postDetails';
+import express, { type Request, type Response } from 'express';
+import type { EntityTarget, ObjectLiteral } from 'typeorm';
 
-import { DataFilling1577087002356 } from './migrations/1577087002356-dataFilling';
-import { createConnection } from './db/createConnection';
-import config from './config';
-import * as ormconfig from './ormconfig.json';
-import { User } from './entities/user';
-import { PostComment } from './entities/postComment';
+// Библиотека берётся из исходников, а не по имени пакета: по имени Node разрешил бы её
+// через собственный `exports` в `build/`, и демо показывало бы прошлую сборку — см.
+// пояснение в `examples/server/tsconfig.json`.
+import {
+  executeQuery,
+  isODataClientError,
+  ODataMetadataMiddleware,
+  resolveEdmType,
+  type QueryParams,
+} from '../../../src/lib';
 
-function getMetadata(entity: EntityTarget<ObjectLiteral>) {
-  const metadata = getConnection()
-    .getMetadata(entity)
-    .ownColumns.map((column) => {
-      return {
+import {
+  Author,
+  Book,
+  BookDetails,
+  Category,
+  Post,
+  Publisher,
+  Review,
+  seedDatabase,
+  Tag,
+  User,
+} from '../../../src/test/fixtures';
+import { dataSource } from './dataSource';
+
+/**
+ * Сущности, доступные через API.
+ *
+ * Ключ — сегмент пути (`/api/books`), значение — класс сущности и алиас. Алиас совпадает
+ * с именем класса: он идёт в SQL префиксом колонок, и совпадение делает генерируемые
+ * запросы читаемыми в логе.
+ *
+ * Опубликованы все сущности схемы, кроме представления `BookSummary` — у него нет
+ * первичного ключа, и набором OData оно быть не может.
+ *
+ * `maxTop` необязателен и по умолчанию равен {@link DEFAULT_MAX_TOP}. Занижать его
+ * осмысленно ровно в одном случае — когда усечение нужно показать: в демо всего несколько
+ * строк на сущность, и на потолке в сотню запрос `$top=500` неотличим от запроса без потолка.
+ */
+const RESOURCES = {
+  books: { entity: Book, alias: 'Book' },
+  authors: { entity: Author, alias: 'Author' },
+  // Потолок занижен намеренно: рецензий пять, и только так видно, что `$top` сверх лимита
+  // усекается, а не отвергается. С `$count=true` это видно в одном ответе: items короче count.
+  // Три, а не два: потолок режет и выборку образцов для конструктора, а ему нужны разные
+  // значения, чтобы собрать примеры с `in` и `$search ... OR`.
+  reviews: { entity: Review, alias: 'Review', maxTop: 3 },
+  publishers: { entity: Publisher, alias: 'Publisher' },
+  categories: { entity: Category, alias: 'Category' },
+  tags: { entity: Tag, alias: 'Tag' },
+  details: { entity: BookDetails, alias: 'BookDetails' },
+  users: { entity: User, alias: 'User' },
+  posts: { entity: Post, alias: 'Post' },
+} as const satisfies Record<
+  string,
+  { entity: EntityTarget<ObjectLiteral>; alias: string; maxTop?: number }
+>;
+
+/** Потолок страницы для ресурсов, которые не задали свой: демо открыто наружу. */
+const DEFAULT_MAX_TOP = 100;
+
+type ResourceName = keyof typeof RESOURCES;
+
+/**
+ * Сегмент маршрута по классу сущности — обратный к {@link RESOURCES} справочник.
+ *
+ * Нужен, чтобы имена наборов в `$metadata` совпали с адресами, по которым эти наборы
+ * реально лежат: клиент берёт `EntitySet Name` и подставляет его в URL, поэтому набор
+ * `Book` при маршруте `/api/books` привёл бы его в никуда.
+ */
+const ROUTE_BY_ENTITY = new Map<unknown, string>(
+  (Object.keys(RESOURCES) as ResourceName[]).map((name) => [RESOURCES[name].entity, name])
+);
+
+/**
+ * Описание полей и связей сущности для конструктора.
+ *
+ * Страница строит по нему всё, что зависит от схемы: список ресурсов, подсказки полей
+ * под `$select` и `$expand` и готовые примеры запросов. Ничего из этого в разметке
+ * не зашито — иначе правка сущности расходилась бы со страницей молча.
+ *
+ * `edmType` — тот же тип, что уходит в `$metadata` (`Edm.String`, `Edm.Int32`,
+ * `Edm.DateTimeOffset`, …). Он и позволяет генерировать примеры по типу поля: для строки
+ * уместен `contains`, для числа — сравнение, для даты — `year()`. Выводить это на клиенте
+ * из имени типа колонки СУБД значило бы держать вторую копию той же таблицы соответствий,
+ * которая уже есть в библиотеке.
+ */
+function describeResource(name: ResourceName) {
+  const resource: { entity: EntityTarget<ObjectLiteral>; alias: string; maxTop?: number } =
+    RESOURCES[name];
+  const metadata = dataSource.getMetadata(resource.entity);
+
+  return {
+    name,
+    alias: resource.alias,
+    // Потолок страницы нужен конструктору, чтобы показать пример с усечением ровно там,
+    // где усечение видно: при `maxTop` больше числа строк оно ничем не проявляется.
+    maxTop: resource.maxTop ?? DEFAULT_MAX_TOP,
+    fields: metadata.columns
+      // Колонки внешних ключей скрыты: они дублируют связь и в $select бесполезны.
+      // Колонки `select: false` — тоже: библиотека отвергает обращение к ним, и подсказка
+      // в конструкторе вела бы прямиком в ошибку 400 (`User.passwordHash`).
+      .filter((column) => !column.relationMetadata && column.isSelect)
+      .map((column) => ({
         name: column.propertyName,
-        type: typeof column.type === 'function' ? column.type.name : column.type,
-        default: column.default,
-        isNullable: column.isNullable,
-      };
-    });
-
-  return metadata;
+        type:
+          typeof column.type === 'function' ? column.type.name.toLowerCase() : String(column.type),
+        edmType: resolveEdmType(column),
+        nullable: column.isNullable,
+      })),
+    relations: metadata.relations.map((relation) => ({
+      name: relation.propertyPath,
+      target: relation.inverseEntityMetadata.name,
+      collection: relation.isOneToMany || relation.isManyToMany,
+    })),
+  };
 }
 
-export default (async () => {
-  try {
-    const dbConfig = config.db;
-    await createConnection(
-      [Author, Post, PostCategory, PostDetails, PostComment, User],
-      [DataFilling1577087002356],
-      { ...dbConfig, ...ormconfig }
-    );
+/**
+ * Обработчик OData-запроса к одной сущности.
+ *
+ * Написан вручную, а не через `ODataQueryMiddleware`, чтобы демо показывало разбор ошибок:
+ * клиентские отдаются как `400` с текстом, по которому видно, что именно не так в запросе.
+ * Для конструктора это важнее, чем краткость.
+ */
+function odataHandler(name: ResourceName) {
+  const resource: { entity: EntityTarget<ObjectLiteral>; alias: string; maxTop?: number } =
+    RESOURCES[name];
 
-    const app = express();
+  return async (request: Request, response: Response) => {
+    try {
+      const result = await executeQuery(
+        dataSource.getRepository(resource.entity),
+        request.query as unknown as QueryParams,
+        {
+          alias: resource.alias,
+          // Потолок страницы: демо открыто наружу, и без него один запрос вытянул бы всё.
+          maxTop: resource.maxTop ?? DEFAULT_MAX_TOP,
+        }
+      );
 
-    // Posts
-    const postsRepository = getRepository(Post);
-    app.get('/api/posts/*$metadata', (res, req) => {
-      return req.status(200).json(getMetadata(Post));
-    });
-    app.get('/api/posts', ODataQueryMiddleware(postsRepository));
-
-    app.get('/api/posts/test', (res, req) => {
-      const test = getConnection().getMetadata(Post);
-      getRepository(Post)
-        .createQueryBuilder('Post')
-        // .andWhere('author23.id = :p0').setParameters({'p0': 1})
-        .select(['Post.id', 'category33.id', 'document50.id'])
-
-        .leftJoinAndSelect('Post.author', 'author8', '1 = 1')
-        .leftJoinAndSelect('author8.document', 'document23', '1 = 1')
-        .leftJoinAndSelect('Post.category', 'category33', '1 = 1')
-        .leftJoin('category33.document', 'document50', '1 = 1')
-
-        .getMany()
-        .then((data) => {
-          req.status(200).json(data);
+      return response.status(200).json(result);
+    } catch (error) {
+      if (isODataClientError(error)) {
+        return response.status(400).json({
+          error: error.name,
+          message: error.message,
         });
+      }
+
+      // Ошибка SQL (например несуществующая колонка) — тоже вина запроса, но текст
+      // приходит от драйвера. В демо его показываем: он помогает понять опечатку.
+      return response.status(400).json({
+        error: 'QueryFailed',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+}
+
+/**
+ * Компилирует код страницы из TypeScript в модули ES.
+ *
+ * Делается при каждом старте, а не отдельной командой: `nodemon` следит и за
+ * `examples/server/client`, поэтому правка исходника перезапускает сервер и тут же
+ * пересобирает страницу. Держать собранные файлы в репозитории при этом не нужно —
+ * они в `.gitignore`.
+ *
+ * Ошибка компиляции роняет запуск намеренно. Отдать страницу, собранную из прошлой версии
+ * исходника, значит показать поведение, которого в коде уже нет, — а разойтись они могут
+ * незаметно, ровно как раньше расходились примеры со схемой.
+ */
+function buildClient(): void {
+  const project = path.join(__dirname, '..', 'tsconfig.client.json');
+
+  // Компилятор берётся из зависимостей проекта, а не из PATH: глобального tsc может
+  // не быть, а версия глобального — отличаться от той, на которой всё проверялось.
+  const tsc = require.resolve('typescript/bin/tsc');
+
+  console.log('Сборка страницы конструктора…');
+
+  execFileSync(process.execPath, [tsc, '--project', project], { stdio: 'inherit' });
+}
+
+export async function start(): Promise<void> {
+  buildClient();
+
+  await dataSource.initialize();
+  await seedDatabase(dataSource);
+
+  const app = express();
+
+  // Страница-конструктор и её ресурсы.
+  app.use(express.static(path.join(__dirname, '..', 'public')));
+
+  // Схема сервиса в CSDL XML — то, что запрашивают настоящие клиенты OData.
+  app.get(
+    '/api/$metadata',
+    ODataMetadataMiddleware(dataSource, {
+      namespace: 'Demo',
+      // Только то, что действительно опубликовано маршрутами: `$metadata` перечисляет
+      // все поля и связи, то есть раскрывает схему БД, и служебным сущностям там не место.
+      entities: Object.values(RESOURCES).map((resource) => resource.entity),
+      entitySetName: (metadata) => ROUTE_BY_ENTITY.get(metadata.target) ?? metadata.name,
+    })
+  );
+
+  // Выжимка для страницы-конструктора: не модель OData, а имена полей для подсказок.
+  // Отдельный путь, потому что формат собственный и стандарту не подчиняется.
+  app.get('/api/$schema', (_request, response) => {
+    response.json(Object.keys(RESOURCES).map((name) => describeResource(name as ResourceName)));
+  });
+
+  for (const name of Object.keys(RESOURCES) as ResourceName[]) {
+    app.get(`/api/${name}/$schema`, (_request, response) => {
+      response.json(describeResource(name));
     });
 
-    // Authors
-    const authorsRepository = getRepository(Author);
-    app.get('/api/authors/*$metadata', (res, req) => {
-      return req.status(200).json(getMetadata(Author));
-    });
-    app.get('/api/authors', ODataQueryMiddleware(authorsRepository));
-
-    // Users
-    const usersRepository = getRepository(User);
-    app.get('/api/users/*$metadata', (res, req) => {
-      return req.status(200).json(getMetadata(User));
-    });
-    app.get('/api/users', ODataQueryMiddleware(usersRepository));
-
-    const port = config.http.port;
-    app.listen(port, () => console.log(`Example app listening on port ${port}!`));
-  } catch (e) {
-    console.error(e, 'Start service error');
+    app.get(`/api/${name}`, odataHandler(name));
   }
-})();
+
+  const port = Number(process.env.PORT ?? 3001);
+
+  app.listen(port, () => {
+    console.log(`Конструктор запросов: http://localhost:${port}/`);
+    console.log(`OData-эндпоинт:       http://localhost:${port}/api/books`);
+  });
+}
+
+// Прямой запуск (`yarn server`), а не импорт.
+if (require.main === module) {
+  start().catch((error) => {
+    console.error('Не удалось запустить демо-сервер:', error);
+    process.exitCode = 1;
+  });
+}

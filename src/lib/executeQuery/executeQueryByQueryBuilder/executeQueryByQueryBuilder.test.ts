@@ -22,16 +22,46 @@ describe('executeQueryByQueryBuilder', () => {
       addOrderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
-      expressionMap: { mainAlias: { name: 'defaultAlias' } },
+      // У настоящего построителя эти поля есть всегда — пустыми, если ничего не задано.
+      // `joinAttributes` показывает, применит ли TypeORM двухшаговую пагинацию, которой
+      // нужен первичный ключ в выборке; по `allOrderBys` и `selects` видно, все ли колонки
+      // сортировки в неё попали.
+      expressionMap: {
+        mainAlias: { name: 'defaultAlias' },
+        joinAttributes: [],
+        allOrderBys: {},
+        selects: [],
+      },
       connection: {
         getMetadata: jest.fn().mockReturnValue({}),
+        // options.type читается для выбора диалекта SQL-функций (LENGTH против LEN и т.п.).
+        options: { type: 'sqlite' },
+        // driver.escape экранирует идентификаторы в условиях $search.
+        driver: { escape: (identifier: string) => `"${identifier}"` },
       },
     } as unknown as jest.Mocked<SelectQueryBuilder<ObjectLiteral>>;
 
-    // Мок метаданных с не виртуальными колонками
+    // Мок метаданных.
+    // isSelect: true обязателен — колонки с `@Column({ select: false })` исключаются
+    // из выборки по умолчанию, и без этого поля мок дал бы пустой SELECT.
+    // relations нужен для разрешения путей `связь/поле` при проверке скрытых колонок.
     mockMetadata = {
-      nonVirtualColumns: [{ propertyPath: 'id' }, { propertyPath: 'name' }],
-      columns: [{ propertyPath: 'content', type: 'varchar' }],
+      nonVirtualColumns: [
+        { propertyPath: 'id', isSelect: true },
+        { propertyPath: 'name', isSelect: true },
+      ],
+      columns: [
+        { propertyPath: 'id', propertyName: 'id', databaseName: 'id', isSelect: true },
+        { propertyPath: 'name', propertyName: 'name', databaseName: 'name', isSelect: true },
+        {
+          propertyPath: 'content',
+          propertyName: 'content',
+          databaseName: 'content',
+          type: 'varchar',
+          isSelect: true,
+        },
+      ],
+      relations: [],
     } as unknown as EntityMetadata;
     (mockQueryBuilder.connection.getMetadata as ReturnType<typeof jest.fn>).mockReturnValue(
       mockMetadata
@@ -50,10 +80,22 @@ describe('executeQueryByQueryBuilder', () => {
     expect(mockQueryBuilder.select).toHaveBeenCalledWith(['defaultAlias.id', 'defaultAlias.name']);
     expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('1 = 1');
     expect(mockQueryBuilder.setParameters).toHaveBeenCalledWith({});
-    expect(mockQueryBuilder.skip).toHaveBeenCalledWith(0);
-    expect(mockQueryBuilder.take).not.toHaveBeenCalled(); // $top = 0, не вызываем take
-    expect(mockQueryBuilder.getManyAndCount).toHaveBeenCalled(); // $count по умолчанию true
-    expect(mockQueryBuilder.getMany).not.toHaveBeenCalled();
+    // skip(0) не вызывается: нулевое смещение и его отсутствие — одно и то же,
+    // а на MySQL `OFFSET 0` без `LIMIT` вообще не выполняется.
+    expect(mockQueryBuilder.skip).not.toHaveBeenCalled();
+    // $top='0' — это явно запрошенная пустая страница (OData v4, раздел 11.2.6.4),
+    // поэтому take(0) вызывается. «Лимита нет» выражается отсутствием $top, а не нулём.
+    expect(mockQueryBuilder.take).toHaveBeenCalledWith(0);
+    // $count не передан → по OData v4 (раздел 11.2.5.5) он равен false,
+    // поэтому лишний COUNT(*) не выполняется.
+    expect(mockQueryBuilder.getMany).toHaveBeenCalled();
+    expect(mockQueryBuilder.getManyAndCount).not.toHaveBeenCalled();
+  });
+
+  it('не вызывает take, если $top не передан', async () => {
+    await executeQueryByQueryBuilder(mockQueryBuilder, { $search: undefined, $skip: '0' });
+
+    expect(mockQueryBuilder.take).not.toHaveBeenCalled();
   });
 
   it('должен использовать явный select из odataQuery, если он указан', async () => {
@@ -94,17 +136,23 @@ describe('executeQueryByQueryBuilder', () => {
     expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('defaultAlias.created', 'DESC');
   });
 
-  it('должен игнорировать orderby равный "1"', async () => {
+  /**
+   * `'1'` — значение `orderby` по умолчанию у базового посетителя (`ORDER BY 1` в чистом SQL).
+   * Конвейер трактует его как «сортировка не задана» и не должен добавлять ничего в запрос.
+   *
+   * Прежняя версия этого теста передавала `$orderby: '1'` как параметр запроса и проверяла
+   * вызов `addOrderBy('ASC', undefined)` — то есть закрепляла заведомо бессмысленный результат
+   * и при этом не проверяла собственно умолчание. Здесь проверяется именно оно.
+   */
+  it('не добавляет сортировку, если $orderby не передан', async () => {
     await executeQueryByQueryBuilder(mockQueryBuilder, {
       $search: undefined,
-      $orderby: '1',
       $top: '0',
       $skip: '0',
       $count: 'false',
     });
 
-    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledTimes(1);
-    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('ASC', undefined);
+    expect(mockQueryBuilder.addOrderBy).not.toHaveBeenCalled();
   });
 
   it('должен обработать поиск ($search) через processSearch', async () => {
@@ -120,7 +168,7 @@ describe('executeQueryByQueryBuilder', () => {
 
     const [, params]: WhereResult = (mockQueryBuilder.andWhere as jest.Mock).mock.calls[1];
 
-    expect(params).toEqual({ textSearchValue: '%test%' });
+    expect(params).toEqual({ searchText0: '%test%' });
   });
 
   it('должен применить пагинацию $skip и $top', async () => {

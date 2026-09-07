@@ -16,3 +16,5 @@ node_modules
 .npm
 
 examples/server/dist
+# Результат компиляции клиента демо-сервера (examples/server/client)
+examples/server/public/js

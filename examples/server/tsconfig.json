@@ -1,21 +1,32 @@
 {
   "compilerOptions": {
-    "emitDecoratorMetadata": true,
-    "experimentalDecorators": true,
-    "strictPropertyInitialization": false,
-    "module": "commonjs",
+    "target": "es2022",
+    "module": "node16",
+    "moduleResolution": "node16",
     "esModuleInterop": true,
-    "target": "es6",
     "resolveJsonModule": true,
-    "noImplicitAny": false,
-    "moduleResolution": "node",
-    "sourceMap": true,
-    "outDir": "dist",
-    "baseUrl": ".",
-    "paths": {
-      "*": ["node_modules/*", "src/types/*"]
-    },
-    "skipLibCheck": true
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "strictPropertyInitialization": false,
+    "strict": true,
+    "skipLibCheck": true,
+
+    // Демо запускается из исходников через ts-node (`yarn server`), собранные файлы
+    // не нужны. Без outDir и rootDir отпадает и конфликт «файл вне rootDir»,
+    // который возникал из-за импорта библиотеки соседним путём.
+    "noEmit": true
+
+    // ПОЧЕМУ БИБЛИОТЕКА ИМПОРТИРУЕТСЯ ОТНОСИТЕЛЬНЫМ ПУТЁМ, А НЕ ПО ИМЕНИ ПАКЕТА.
+    // Здесь стояло отображение `paths` с именем `odata-v4-typeorm-improved`, но на
+    // выполнение оно не влияет: `paths` — правило проверки типов, а `ts-node` разрешает
+    // модули обычным способом Node. Node же умеет ссылаться на пакет по его собственному
+    // имени через `exports`, поэтому демо грузило `build/`, а не `src/lib`: правка
+    // в библиотеке не появлялась в демо до `yarn build`, хотя `nodemon` и следил
+    // за `src/lib`. Тайпчек при этом проходил, и расхождение ничем себя не выдавало.
+    //
+    // Загрузку пакета под настоящим именем проверяет `scripts/check-package.ts`
+    // (`yarn build:check`) — в обоих форматах и на настоящем Node, то есть строже,
+    // чем это делало демо.
   },
   "include": ["src/**/*"]
 }

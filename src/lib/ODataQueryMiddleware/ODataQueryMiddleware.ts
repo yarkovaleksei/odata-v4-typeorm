@@ -1,63 +1,147 @@
 /**
- * Express-middleware: читает OData-параметры из `req.query`, выполняет запрос через TypeORM
- * и отвечает JSON-ом. Ошибки логируются и маскируются как 500 с кратким телом ответа.
+ * @file Express-middleware: читает OData-параметры из `req.query`, выполняет запрос через TypeORM
+ * и отвечает JSON-ом.
+ *
+ * Несмотря на название, это не промежуточный обработчик, а конечный: он сам отправляет ответ.
+ * Ставить его нужно последним в маршруте.
  */
-import type { Request, Response, NextFunction } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import type { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
+import { QueryFailedError } from 'typeorm';
 
+import { isODataClientError } from '../errors';
 import { executeQuery } from '../executeQuery';
+import type { ExecuteQueryOptions } from '../executeQuery/types';
 import type { QueryParams } from '../types';
 
-/** Настройки middleware: опциональный логгер ошибок и алиас корня для QueryBuilder. */
-interface ODataQueryMiddlewareSettings {
+/** Настройки middleware. */
+interface ODataQueryMiddlewareSettings extends ExecuteQueryOptions {
+  /**
+   * Куда писать ошибки выполнения. Интерфейс намеренно минимальный (только `error`),
+   * чтобы подходили и `console`, и pino/winston, и NestJS-логгер. По умолчанию — `console`.
+   */
   logger?: {
     error: (text: string, ...args: unknown[]) => void;
   };
-  alias?: string;
+
+  /**
+   * Включать ли текст исходной ошибки в тело HTTP-ответа.
+   *
+   * По умолчанию `false`, и это важно: сообщение `QueryFailedError` из TypeORM — это текст
+   * ошибки СУБД, раскрывающий имена таблиц и колонок. Подбирая `$filter=<имя> eq 1`, клиент
+   * перечислил бы схему по одному полю за запрос.
+   *
+   * Включайте только в средах разработки.
+   *
+   * @defaultValue `false`
+   */
+  exposeErrors?: boolean;
+}
+
+/** Что именно отдавать клиенту по конкретной ошибке. */
+interface ErrorResponse {
+  status: number;
+  message: string;
+}
+
+/**
+ * Классификация ошибки: вина клиента или сервера.
+ *
+ * Три источника клиентских ошибок:
+ * 1. Ошибки самой библиотеки с признаком `isClientError` — некорректный синтаксис OData,
+ *    неподдерживаемая конструкция, недопустимое значение параметра.
+ * 2. `QueryFailedError` из TypeORM. Сюда почти всегда приводит несуществующая колонка
+ *    в `$filter` или `$orderby` — имена полей по метаданным не проверяются. Настоящий сбой
+ *    БД (нет соединения, таймаут) даёт другие классы ошибок и попадает в ветку `500`.
+ * 3. Всё остальное — `500`.
+ *
+ * Текст ошибки наружу не уходит: в `500` он бесполезен клиенту, а в `400` может раскрыть
+ * схему БД. Полное сообщение всегда пишется в лог.
+ */
+function classifyError(error: unknown, exposeErrors: boolean): ErrorResponse {
+  if (isODataClientError(error)) {
+    // Эти сообщения библиотека формирует сама и знает, что в них нет деталей сервера.
+    return { status: 400, message: error.message };
+  }
+
+  if (error instanceof QueryFailedError) {
+    return {
+      status: 400,
+      message: exposeErrors ? error.message : 'Invalid OData query.',
+    };
+  }
+
+  return {
+    status: 500,
+    message: exposeErrors && error instanceof Error ? error.message : 'Internal server error.',
+  };
 }
 
 /**
  * Фабрика middleware для маршрута Express.
  *
  * @param repositoryOrQueryBuilder - либо `Repository` (будет создан `createQueryBuilder(alias)`),
- *   либо уже настроенный `SelectQueryBuilder`.
- * @param settings - `alias` пробрасывается в `executeQuery`; при ошибке вызывается `logger.error`, иначе `console.error`.
+ *   либо уже настроенный `SelectQueryBuilder`. Объект захватывается замыканием один раз,
+ *   поэтому ограничения, зависящие от конкретного запроса (текущий пользователь, тенант),
+ *   так задать нельзя — для них нужен собственный обработчик поверх `executeQuery`.
+ * @param settings - всё, что принимает `executeQuery` (`alias`, `maxTop`, `allowedFields`,
+ *   `allowedExpands`), плюс `logger` и `exposeErrors`.
  * @returns async handler `(req, res, next)`.
  *
- * Поведение ответа: при успехе — `200` и тело результата `executeQuery` (массив или `{ items, count }`);
- * при исключении — `500` с сообщением; после ветвления всегда вызывается `next()` (в т.ч. после отправки ответа).
+ * @remarks Поведение ответа:
+ *
+ * | Ситуация | Код | Тело |
+ * |---|---|---|
+ * | Успех | `200` | результат `executeQuery` |
+ * | Некорректный или неподдерживаемый запрос | `400` | `{ message }` |
+ * | Ошибка SQL (обычно несуществующая колонка) | `400` | `{ message: 'Invalid OData query.' }` |
+ * | Всё остальное | `500` | `{ message: 'Internal server error.' }` |
+ *
+ * `next(error)` вызывается только при `500` — чтобы ошибка дошла до общего обработчика
+ * приложения. При успехе и при `400` цепочка останавливается: ответ уже отправлен,
+ * и передавать управление дальше некуда.
+ *
+ * @example
+ * app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), {
+ *   alias: 'User',
+ *   maxTop: 100,
+ *   allowedExpands: ['posts'],
+ *   logger: myLogger,
+ * }));
  */
 export function ODataQueryMiddleware<T extends ObjectLiteral = ObjectLiteral>(
   repositoryOrQueryBuilder: Repository<T> | SelectQueryBuilder<T>,
   settings: ODataQueryMiddlewareSettings = {}
 ) {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    const defaultAlias = '';
+  const { logger = console, exposeErrors = false, ...queryOptions } = settings;
 
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await executeQuery(
         repositoryOrQueryBuilder,
         // Express кладёт query в строковый вид; приводим к контракту QueryParams.
         req.query as unknown as QueryParams,
-        {
-          alias: settings?.alias ?? defaultAlias,
-        }
+        queryOptions
       );
 
-      return res.status(200).json(result);
+      res.status(200).json(result);
+
+      return;
     } catch (e) {
-      if (settings && typeof settings.logger !== 'undefined') {
-        settings.logger.error('ODATA ERROR', e);
-      } else {
-        console.error('ODATA ERROR', e);
+      const { status, message } = classifyError(e, exposeErrors);
+
+      // Полное сообщение — всегда в лог, независимо от того, что ушло клиенту.
+      logger.error('ODATA ERROR', e);
+
+      res.status(status).json({ message });
+
+      // Серверную ошибку пробрасываем дальше: пусть её увидят общий обработчик
+      // приложения и системы наблюдения. Клиентскую — нет, это штатный сценарий.
+      if (status >= 500) {
+        return next(e);
       }
 
-      res.status(500).json({
-        message: 'Internal server error.',
-        error: { message: (e as Error).message },
-      });
+      return;
     }
-
-    return next();
   };
 }

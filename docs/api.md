@@ -1,0 +1,656 @@
+# Справочник API
+
+Всё перечисленное импортируется из корня пакета:
+
+```ts
+import {
+  // Стабильная часть контракта
+  executeQuery,
+  executeQueryByQueryBuilder,
+  ODataQueryMiddleware,
+  ODataMetadataMiddleware,
+  createMetadataDocument,
+  createQuery,
+  createFilter,
+  TypeOrmVisitor,
+  ODataUnsupportedError,
+  // Ошибки и признак клиентской ошибки — тоже часть контракта
+  ODataError,
+  ODataParseError,
+  ODataInvalidQueryError,
+  isODataClientError,
+  // Разбор OData отдельно от трансляции
+  parseQueryOptions,
+  parseFilter,
+  // Внутренняя кухня: видна из-за реэкспорта барреля
+  parseQueryParams,
+  queryToOdataString,
+  mapToObject,
+  processIncludes,
+  processSearch,
+} from 'odata-v4-typeorm-improved';
+```
+
+Стабильная часть контракта — девять имён в первой группе; их наличие в обоих форматах
+сборки проверяет `yarn build:check` ([scripts/check-package.ts](../scripts/check-package.ts)).
+Классы ошибок и `isODataClientError` из второй группы так же стабильны — без них не написать
+обработчик HTTP. Последняя группа экспортируется как побочный эффект реэкспорта барреля;
+рассчитывать на её неизменность между минорными версиями не стоит.
+
+---
+
+## `executeQuery`
+
+Основная точка входа: выполняет OData-параметры против TypeORM.
+
+```ts
+function executeQuery<T extends ObjectLiteral = ObjectLiteral>(
+  repositoryOrQueryBuilder: Repository<T> | SelectQueryBuilder<T>,
+  query: QueryParams,
+  options?: ExecuteQueryOptions
+): Promise<T[] | GetManyResponse<T>>
+```
+
+| Параметр | Описание |
+|---|---|
+| `repositoryOrQueryBuilder` | `Repository` → будет создан `createQueryBuilder(alias)`. `SelectQueryBuilder` → используется как есть; предустановленные условия сохраняются, OData-условия добавляются через `andWhere` |
+| `query` | Объект параметров, обычно напрямую `req.query`. Значения могут быть строками |
+| `options.alias` | SQL-алиас корневой сущности. Может быть любым: метаданные берутся у построителя. Для готового `SelectQueryBuilder` либо не задавайте, либо задайте его же корневой алиас |
+| `options.maxTop` | Верхняя граница `$top`; запрос с бо́льшим значением усекается |
+| `options.allowedFields` | Белый список полей для `$select` / `$filter` / `$orderby`. Полные пути от корня |
+| `options.allowedExpands` | Белый список связей для `$expand` и путей в фильтрах |
+| `options.searchFields` | Поля для `$search`; пути от корня, можно через связи (`'author/name'`) |
+| `options.searchMode` | `'like'` (по умолчанию) или `'fulltext'` — полнотекстовый поиск СУБД |
+| `options.searchLanguage` | Язык словоформ PostgreSQL для `'fulltext'`. По умолчанию `'simple'` |
+| `options.autoExpand` | Возвращать связи корня без `$expand`. По умолчанию `false` |
+| `options.nestedPaginationInSql` | Выполнять ли вложенные `$top` / `$skip` в SQL. По умолчанию `true` |
+
+**Возвращает** массив сущностей; `{ items, count }` — только при явном `$count=true`
+(отсутствующий `$count` по OData v4, раздел 11.2.5.5, означает `false`).
+
+`$count` **внутри** `$expand` формы ответа не меняет: он добавляет к каждой сущности
+свойство `<связь>@odata.count` рядом с самой связью. Подробности и ограничения —
+в [odata-support.md](./odata-support.md#вложенный-count).
+
+```ts
+// Репозиторий
+const data = await executeQuery(dataSource.getRepository(User), req.query, { alias: 'User' });
+
+// QueryBuilder с предустановленным ограничением доступа. Алиас произвольный.
+const qb = dataSource
+  .getRepository(User)
+  .createQueryBuilder('u')
+  .where('u.tenantId = :tenantId', { tenantId: req.user.tenantId });
+
+const data = await executeQuery(qb, req.query);
+
+// Публичный API: потолок страницы и перечень доступного
+const data = await executeQuery(repository, req.query, {
+  alias: 'User',
+  maxTop: 100,
+  allowedFields: ['id', 'name', 'posts/title'],
+  allowedExpands: ['posts'],
+});
+```
+
+Сужение типа результата:
+
+```ts
+const result = await executeQuery(repo, req.query, { alias: 'User' });
+const items = Array.isArray(result) ? result : result.items;
+const total = Array.isArray(result) ? result.length : result.count;
+```
+
+**Ошибки**
+
+| Ошибка | Причина | HTTP |
+|---|---|---|
+| `ODataParseError` | Синтаксически некорректный OData-параметр; конструкция, которой нет в грамматике (геофункции, JSON-литералы, `$apply`, `$levels`, `$skiptoken`) | `400` |
+| `ODataUnsupportedError` | Конструкция, которую грамматика принимает, но транслировать в SQL нельзя (`isof`, `totaloffsetminutes`, приведение `cast`, которое может провалиться, любая неизвестная функция, `$count` глубже первого уровня `$expand`) | `400` |
+| `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка; имя `$compute`, занятое свойством сущности или объявленное дважды; `$count` у связи «к одному» | `400` |
+| `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются | `400` |
+| `EntityMetadataNotFoundError` | У построителя нет метаданных и `alias` не соответствует сущности | `500` |
+
+Первые три наследуют `ODataError` и несут признак `isClientError` — см. раздел
+[Ошибки](#ошибки).
+
+---
+
+## `executeQueryByQueryBuilder`
+
+То же самое, но принимает только `SelectQueryBuilder`. `executeQuery` — тонкая обёртка над ней.
+
+```ts
+function executeQueryByQueryBuilder<T extends ObjectLiteral = ObjectLiteral>(
+  inputQueryBuilder: SelectQueryBuilder<T>,
+  query: QueryParams,
+  options?: ExecuteQueryOptions
+): Promise<T[] | GetManyResponse<T>>
+```
+
+Вызывайте напрямую, если построитель у вас уже есть и различение типов в рантайме не нужно.
+
+---
+
+## `ODataQueryMiddleware`
+
+Готовый обработчик Express: читает `req.query`, выполняет запрос, сам отправляет JSON.
+
+```ts
+function ODataQueryMiddleware<T extends ObjectLiteral = ObjectLiteral>(
+  repositoryOrQueryBuilder: Repository<T> | SelectQueryBuilder<T>,
+  settings?: ExecuteQueryOptions & {
+    logger?: { error: (text: string, ...args: unknown[]) => void };
+    exposeErrors?: boolean;
+  }
+): (req: Request, res: Response, next: NextFunction) => Promise<void>
+```
+
+```ts
+app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), {
+  alias: 'User',
+  maxTop: 100,
+  allowedExpands: ['posts'],
+  logger: myLogger,
+}));
+```
+
+**Ответы**
+
+| Ситуация | Код | Тело |
+|---|---|---|
+| Успех | `200` | Результат `executeQuery` |
+| Некорректный или неподдерживаемый запрос | `400` | `{ message }` с описанием проблемы |
+| Ошибка SQL (обычно несуществующая колонка) | `400` | `{ message: 'Invalid OData query.' }` |
+| Всё остальное | `500` | `{ message: 'Internal server error.' }` |
+
+Текст исходной ошибки наружу не уходит — он всегда пишется в `logger`. Для сред разработки
+есть `exposeErrors: true`, включающий сообщение в тело ответа.
+
+`next(error)` вызывается только при `500`, чтобы ошибка дошла до общего обработчика приложения;
+при `400` цепочка останавливается — это штатный сценарий, а не сбой.
+
+Несмотря на название, обработчик конечный — ставьте его последним в маршруте.
+
+**Ограничение:** репозиторий захватывается замыканием один раз, поэтому ограничения,
+зависящие от запроса (текущий пользователь, тенант), так не задать — для них пишите свой
+обработчик поверх `executeQuery`, пример в
+[recipes.md](./recipes.md#ограничение-выдачи-правами-пользователя).
+
+---
+
+## `ODataMetadataMiddleware`
+
+Готовый обработчик Express для маршрута `$metadata`: отдаёт схему сервиса в CSDL XML.
+
+```ts
+function ODataMetadataMiddleware(
+  dataSource: DataSource,
+  settings?: MetadataDocumentOptions & {
+    logger?: { error: (text: string, ...args: unknown[]) => void };
+  }
+): (req: Request, res: Response, next: NextFunction) => void
+```
+
+```ts
+app.get('/api/$metadata', ODataMetadataMiddleware(dataSource, {
+  namespace: 'Shop',
+  entities: [Author, Book],
+  entitySetName: (metadata) => metadata.tableName,
+}));
+
+app.get('/api/author', ODataQueryMiddleware(dataSource.getRepository(Author), { alias: 'Author' }));
+app.get('/api/book', ODataQueryMiddleware(dataSource.getRepository(Book), { alias: 'Book' }));
+```
+
+**Ответы**
+
+| Ситуация | Код | Тело |
+|---|---|---|
+| Успех | `200` | Документ CSDL XML |
+| Любая ошибка | `500` | `{ message: 'Internal server error.' }` |
+
+Заголовки успешного ответа — `Content-Type: application/xml` и `OData-Version: 4.0`.
+Клиентских ошибок здесь не бывает: документ не зависит от содержимого запроса.
+
+`dataSource` может быть ещё не инициализирован в момент регистрации маршрута — документ
+строится при первом запросе. Построенный документ кэшируется, неудачная попытка — нет:
+иначе ранний запрос к приложению, которое ещё не подключилось к БД, закрепил бы ошибку
+навсегда.
+
+**Путь маршрута** должен совпадать с корнем сервиса, от которого клиент считает адреса
+наборов: если данные лежат на `/api/Authors`, схема обязана быть на `/api/$metadata`.
+В Express 5 `$` — обычный символ, экранировать его не нужно.
+
+---
+
+## `createMetadataDocument`
+
+Строит документ `$metadata` (CSDL XML) по метаданным TypeORM. HTTP не касается — подходит
+для NestJS, Fastify, записи схемы в файл и тестов.
+
+```ts
+function createMetadataDocument(
+  dataSource: DataSource,
+  options?: MetadataDocumentOptions
+): string
+```
+
+```ts
+const xml = createMetadataDocument(dataSource, { namespace: 'Shop' });
+```
+
+**Зачем XML.** Спецификация OData v4 определяет два представления модели — CSDL XML
+и CSDL JSON, — причём XML обязательное. Клиенты исходят из этого: `ra-data-odata-server`
+(react-admin), `@odata/client`, Olingo и Excel запрашивают `$metadata` и разбирают ответ
+как XML. JSON они не прочитают.
+
+**Что попадает в документ.** Ровно то, что библиотека реально отдаёт по запросу: свойства —
+`nonVirtualColumns` без скрытых `select: false`, то есть тот же список, который идёт
+в `SELECT` по умолчанию; связи — то, что доступно через `$expand`. Совпадение намеренное:
+документ, обещающий поле, которого запрос не вернёт, хуже отсутствующего — клиент построит
+по нему форму и получит пустую колонку.
+
+**Чего в документе нет:**
+
+| Что | Почему |
+|---|---|
+| Колонки с `@Column({ select: false })` | Библиотека их не возвращает и отвергает обращения к ним (дефект A-12). Включаются опцией `includeHiddenColumns` |
+| Колонки встроенных сущностей (`@Column(() => Name)`) | Путь свойства содержит точку (`name.first`); в CSDL это отдельный `ComplexType`, а запросить такое поле всё равно нельзя — `name/first` разбирается как переход по связи |
+| Колонки внешних ключей (`authorId`) | В модели OData за них отвечает `NavigationProperty`; TypeORM помечает их виртуальными, и в `SELECT` они тоже не попадают |
+| Сущности без первичного ключа (обычно представления) | `EntityType` обязан иметь `Key` |
+| Сущности, чей ключ ведёт через связь | Путь такого ключа выглядит как `book.id`, представить его `PropertyRef` нельзя |
+| Таблицы связи «многие ко многим» | Самостоятельными сущностями не являются; в модели OData им соответствует сама связь |
+| Связи на сущности вне документа | Ссылка на необъявленный тип сделала бы схему невалидной целиком |
+
+### `MetadataDocumentOptions`
+
+| Поле | Тип | По умолчанию | Назначение |
+|---|---|---|---|
+| `namespace` | `string` | `'Default'` | Пространство имён схемы; им же квалифицируются ссылки на типы |
+| `containerName` | `string` | `'Container'` | Имя `EntityContainer` |
+| `entities` | `EntityTarget[]` | все из `DataSource` | Какие сущности описывать |
+| `entitySetName` | `(metadata) => string` | `(m) => m.name` | Имя `EntitySet` |
+| `includeHiddenColumns` | `boolean` | `false` | Описывать ли колонки `select: false` |
+| `edmType` | `(column) => string \| undefined` | — | Переопределение типа EDM; `undefined` означает «решай по умолчанию» |
+
+**Про `entitySetName`.** Для потребителей вроде `ra-data-odata-server` это имя становится
+и именем ресурса react-admin, и сегментом URL, по которому он ходит за данными, — то есть
+оно обязано совпадать с маршрутом, на который повешен `ODataQueryMiddleware`. Множественное
+число по умолчанию не образуется намеренно: правила английской морфологии в общем случае
+не выводятся, и угаданное `Personss` молча разошлось бы с реальным маршрутом.
+
+**Про `entities`.** Для публичного API перечисляйте сущности явно: `$metadata` содержит
+имена всех полей и связей, то есть раскрывает схему БД целиком, и служебным сущностям
+(сессии, аудит, очереди) там делать нечего.
+
+**Про типы.** Соответствие типов колонок типам EDM ведёт `resolveEdmType`. Незнакомый тип
+приводится к `Edm.String`, а не отвергается ошибкой: набор типов у каждой СУБД открыт
+(домены, расширения), и падение генерации всего документа из-за одной экзотической колонки
+было бы хуже приблизительного описания одного поля. Для таких колонок есть `edmType`.
+Приближённые дробные (`float`, `real`, `double precision`) все приводятся к `Edm.Double`:
+объявить хранилище точнее, чем оно есть, безопасно, обратное направление — нет.
+
+**Ошибки.** `createMetadataDocument` бросает `Error`, если `DataSource` не инициализирован:
+до `initialize()` список сущностей пуст, и молча вернулся бы синтаксически корректный, но
+пустой документ — клиент решил бы, что сервис не отдаёт ни одного ресурса, и никакой ошибки
+при этом не увидел бы.
+
+---
+
+## `createQuery`
+
+Компилирует полную OData query string в объект с фрагментами SQL. К базе не обращается.
+
+```ts
+function createQuery(odataQuery: string | Token, options: SqlOptions): TypeOrmVisitor
+```
+
+```ts
+const compiled = createQuery("$filter=Size eq 4 and Age gt 18", { alias: 'user' });
+
+compiled.where;      // 'user.Size = :p0 AND user.Age > :p1'
+compiled.select;     // '*'
+compiled.orderby;    // '1'
+compiled.parameters; // Map { 'p0' => 4, 'p1' => 18 }
+compiled.includes;   // TypeOrmVisitor[] — по одному на сегмент $expand
+```
+
+Подстановка в TypeORM вручную:
+
+```ts
+queryBuilder
+  .andWhere(compiled.where)
+  .setParameters(mapToObject(compiled.parameters));
+```
+
+Лямбда-операторы (`books/any(b: …)`) при прямом вызове не работают: компилятор знает только
+имена свойств, а для подзапроса нужны имя таблицы и колонки внешнего ключа. Передайте
+`resolveRelation` — либо пользуйтесь `executeQuery`, который подставляет её сам.
+
+---
+
+## `createFilter`
+
+То же, но для одного выражения фильтра — **без** префикса `$filter=`.
+
+```ts
+function createFilter(odataFilter: string | Token, options: SqlOptions): TypeOrmVisitor
+```
+
+```ts
+// GET /api/Users?$filter=Id eq 42
+const compiled = createFilter(req.query.$filter, { alias: '' });
+
+compiled.where;      // 'Id = :p0'
+compiled.parameters; // Map { 'p0' => 42 }
+
+connection.query(`SELECT * FROM users WHERE ${compiled.where}`, compiled.parameters);
+```
+
+Основной сценарий — «сырой» SQL мимо TypeORM. Полный пример, включая перевод именованных
+плейсхолдеров в позиционные: [recipes.md](./recipes.md#без-typeorm-только-компиляция-в-sql).
+
+---
+
+## `TypeOrmVisitor`
+
+Класс-посетитель, выполняющий обход AST. Нужен, только если вы хотите переопределить
+трансляцию отдельных узлов.
+
+```ts
+class TypeOrmVisitor {
+  includes: TypeOrmVisitor[];   // дочерние посетители $expand
+  alias: string;                // SQL-алиас этой ветки
+  select: string;               // '*' если $select не задан
+  where: string;                // '1 = 1' если $filter не задан
+  orderby: string;              // '1' если $orderby не задан
+  parameters: Map<string, unknown>;
+  navigationProperty: string;   // имя связи (у дочерних посетителей)
+
+  constructor(options: SqlOptions);
+  from(table: string): string;  // собрать полный SELECT (для сценария без TypeORM)
+}
+```
+
+```ts
+const visitor = new TypeOrmVisitor({ alias: 'u' });
+const compiled = visitor.Visit(parseQueryOptions("$filter=name eq 'Ann'"));
+```
+
+> `from(table)` подставляет имя таблицы в SQL без экранирования. Пользовательский ввод туда
+> передавать нельзя.
+
+---
+
+## Типы
+
+### `QueryParams`
+
+Параметры «как пришли», до нормализации. Все поля — строки, потому что таким их кладёт Express.
+
+```ts
+interface QueryParams {
+  $search?: string;
+  $filter?: string;
+  $orderby?: string;
+  $select?: string;
+  $expand?: string;
+  $compute?: string;
+  $top?: string;
+  $skip?: string;
+  $count?: string;
+}
+```
+
+### `ParsedQueryParams`
+
+Результат `parseQueryParams`: пагинация и `$count` строго типизированы и всегда определены.
+
+```ts
+type ParsedQueryParams = Pick<
+  QueryParams,
+  '$search' | '$filter' | '$orderby' | '$select' | '$expand' | '$compute'
+> & {
+  $top?: number;   // undefined = «$top не передан»; 0 = «пустая страница»
+  $skip: number;
+  $count: boolean;
+};
+```
+
+### `SqlOptions`
+
+Опции компиляции для `createQuery` и `createFilter`.
+
+```ts
+interface SqlOptions {
+  alias: string;                     // SQL-префикс колонок; '' — без префикса
+  useParameters?: boolean;           // значения в параметры, а не в текст SQL; по умолчанию true
+  dialect?: SqlDialect | string;     // 'postgres' | 'mysql' | … либо type из настроек TypeORM
+  resolveRelation?: RelationResolver; // как развернуть связь в подзапрос — нужно лямбдам
+  resolveColumnType?: ColumnTypeResolver; // тип EDM колонки по пути — нужно cast
+}
+```
+
+`useParameters: false` инлайнит литералы в текст SQL. Нужен только там, где запрос собирают
+и исполняют вручную и параметры некуда передать; это же и единственная поверхность, через
+которую в SQL попадает пользовательский ввод, — отсюда обратное умолчание.
+
+`resolveRelation` заполняет слой выполнения: `executeQuery` строит её из метаданных TypeORM.
+Без неё лямбда-операторы `any` / `all` отвергаются `ODataUnsupportedError` — имя таблицы
+компилятору взять неоткуда.
+
+`resolveColumnType` устроена так же и по той же причине: компилятор оперирует именами свойств
+и типа колонки не знает, а без типа нельзя решить, может ли приведение провалиться.
+`executeQuery` строит её из метаданных; без неё `cast` над колонкой отвергается
+`ODataUnsupportedError`, а над литералом работает — тип литерала записан в дереве разбора.
+
+```ts
+// Тот же хук вручную: путь свойства от корня → имя примитивного типа EDM
+const compiled = createFilter("cast(age,Edm.String) eq '36'", {
+  alias: 'Author',
+  dialect: 'postgres',
+  resolveColumnType: (path) => (path === 'age' ? 'Edm.Int32' : undefined),
+});
+```
+
+### `ExecuteQueryOptions`
+
+```ts
+interface ExecuteQueryOptions {
+  alias?: string;                        // SQL-префикс колонок
+  maxTop?: number;                       // потолок $top; больше — усекается
+  allowedFields?: readonly string[];     // белый список полей, полные пути от корня
+  allowedExpands?: readonly string[];    // белый список связей, имена без путей
+  searchFields?: readonly string[];      // поля для $search, можно пути через связи
+  searchMode?: 'like' | 'fulltext';      // как сравнивать текст, по умолчанию 'like'
+  searchLanguage?: string;               // язык словоформ PostgreSQL, по умолчанию 'simple'
+  autoExpand?: boolean;                  // возвращать связи корня без $expand, по умолчанию false
+  nestedPaginationInSql?: boolean;       // вложенный $top / $skip средствами SQL, по умолчанию true
+}
+```
+
+`allowedFields` перечисляет **все** поля, к которым запрос вправе обратиться, — не только
+через `$select`, но и через `$filter` и `$orderby`, включая аргументы функций.
+Пути указываются от корня: `['id', 'name', 'posts/title']`.
+
+`allowedExpands` проверяется на каждом уровне вложенности: для
+`$expand=posts($expand=comments)` в списке должны быть и `posts`, и `comments`.
+
+`searchFields` перечисляет поля, по которым работает `$search`. Без него поиск идёт по всем
+скалярным колонкам корня — удобно, но на публичном API опасно и медленно: перебором строки
+поиска клиент выясняет содержимое полей, которые ему не показывают, и каждый запрос сканирует
+таблицу целиком. Путь может идти через связи (`'author/name'`, `'books/reviews/text'`) —
+такое поле компилируется в `EXISTS`, поэтому число корневых строк не меняется.
+
+`searchMode: 'fulltext'` переключает сравнение с подстроки (`LIKE`) на полнотекстовый поиск
+СУБД: `to_tsvector @@ plainto_tsquery` в PostgreSQL, `MATCH … AGAINST` в MySQL. В MySQL колонка
+обязана входить в индекс `FULLTEXT`; на SQLite и MS SQL режим молча остаётся `'like'`.
+Язык словоформ PostgreSQL задаётся `searchLanguage` и должен совпадать с языком в индексе.
+Подробности — в [odata-support.md](./odata-support.md#как-сравнивать).
+
+`autoExpand: true` возвращает связи корневой сущности без единого `$expand` — так, как если бы
+клиент перечислил их сам. Глубина — один уровень, как у `$expand=*` в OData v4: дописываются
+связи корня, но не связи связей (иначе дерево было бы бесконечным — связи почти всегда
+образуют цикл). Следующие уровни запрашиваются явно, и с опцией это сочетается:
+
+```ts
+// Книга придёт с author, publisher, category, reviews, tags и details,
+// а отзывы — ещё и со своими авторами.
+const data = await executeQuery(repository, { $expand: 'reviews($expand=user)' }, {
+  alias: 'Book',
+  autoExpand: true,
+});
+```
+
+Что прислал клиент, то и остаётся: связь, названная в `$expand`, сохраняет свои вложенные
+опции (`$expand=reviews($top=2)` даёт страницу отзывов, остальные связи добавляются целиком).
+Заданный `allowedExpands` тоже соблюдается — автоматически добавляются только связи из списка,
+и запрос при этом не отвергается.
+
+Цена — соединение на каждую связь, а связь «ко многим» ещё и умножает число строк в плоском
+результате: у сущности с тремя коллекциями по десять записей одна корневая строка
+разворачивается в тысячу. Библиотека это не ограничивает сознательно: размер таблиц и структуру
+связей знает разработчик. На публичном API включать не стоит — там для того же результата есть
+`$expand`, который клиент указывает явно и по одной связи.
+
+`nestedPaginationInSql` управляет тем, как выполняется вложенная пагинация
+`$expand=posts($top=2)`. По умолчанию страницу каждой связи вырезает оконная функция
+в условии соединения, и из базы поднимается только она. При `false` связанные строки
+приходят целиком, а срез делается над деревом сущностей — результат тот же, запрос проще.
+Выключать имеет смысл на СУБД без оконных функций, которую библиотека не распознала
+(MySQL 5.7, MariaDB 10.1 — обе сняты с поддержки), либо при неудачном плане запроса.
+На MySQL и на незнакомом драйвере срез и так делается в памяти — там опция ничего
+не меняет; подробности в [odata-support.md](./odata-support.md#вложенные-top-и-skip).
+
+## Ошибки
+
+Все ошибки библиотеки наследуют `ODataError` и несут признак `isClientError` —
+по нему HTTP-слой отличает `400` от `500`, не разбирая текст сообщения.
+
+```ts
+abstract class ODataError extends Error {
+  abstract readonly isClientError: boolean;
+}
+
+function isODataClientError(error: unknown): error is ODataError;
+```
+
+| Класс | Когда | Дополнительные поля |
+|---|---|---|
+| `ODataParseError` | выражение не разобрал парсер | `source`, `position?` |
+| `ODataUnsupportedError` | конструкция вне поддерживаемого подмножества | `feature`, `fragment?` |
+| `ODataInvalidQueryError` | значение параметра недопустимо | `parameter` |
+
+```ts
+import { isODataClientError } from 'odata-v4-typeorm-improved';
+
+try {
+  await executeQuery(repo, req.query, { alias: 'User' });
+} catch (e) {
+  if (isODataClientError(e)) {
+    return res.status(400).json({ message: e.message });
+  }
+
+  logger.error('OData query failed', e);
+
+  return res.status(500).json({ message: 'Internal server error.' });
+}
+```
+
+Существование этих классов — следствие правила «молча ничего не терять»: раньше
+неподдержанный узел AST просто пропускался, из-за чего `$filter=not (…)` возвращал
+всю таблицу вместо подмножества, а любая ошибка становилась `500` с текстом СУБД в теле.
+
+### `GetManyResponse<T>`
+
+```ts
+interface GetManyResponse<T extends ObjectLiteral> {
+  items: T[];
+  count: number;   // всего строк по фильтрам, без учёта $top/$skip
+}
+```
+
+Возвращается только при `$count=true`. Без `$count` ответ — обычный `T[]`, поэтому
+результат `executeQuery` имеет тип `T[] | GetManyResponse<T>` и требует сужения.
+
+### `SqlDialect`
+
+```ts
+type SqlDialect = 'postgres' | 'mysql' | 'sqlite' | 'mssql' | 'oracle' | 'ansi';
+```
+
+`dialect` принимает и «сырой» `type` из настроек TypeORM (`'better-sqlite3'`, `'mariadb'`,
+`'aurora-postgres'`) — незнакомое значение сводится к `'ansi'`. `executeQuery` подставляет
+его из подключения автоматически; задавать вручную нужно только при прямом вызове
+`createQuery` / `createFilter`:
+
+```ts
+createQuery('$filter=year(createdAt) eq 2023', { alias: 'u', dialect: 'sqlite' });
+// where: "CAST(strftime('%Y', u.createdAt) AS INTEGER) = :p0"
+
+createQuery('$filter=year(createdAt) eq 2023', { alias: 'u', dialect: 'postgres' });
+// where: "EXTRACT(YEAR FROM u.createdAt) = :p0"
+```
+
+---
+
+## Вспомогательные функции
+
+Экспортируются, но относятся к внутренней кухне.
+
+### `parseQueryParams(query): ParsedQueryParams`
+
+Нормализация. `$skip` → целое, `$count` → boolean (**по умолчанию `false`**, как требует
+OData v4, раздел 11.2.5.5), пустой `$search` → `undefined`. Входной объект не мутируется.
+
+`$top` различает «не передан» (`undefined`) и «передан ноль» (`0`): по OData v4
+(раздел 11.2.6.4) `$top=0` — корректный запрос пустой страницы, а не синоним отсутствия лимита.
+
+```ts
+parseQueryParams({ $top: '10', $skip: ' 5 ', $search: '  ' });
+// → { $top: 10, $skip: 5, $search: undefined, $count: false }
+
+parseQueryParams({});          // → { $top: undefined, $skip: 0, $count: false }
+parseQueryParams({ $top: '0' }); // → { $top: 0, ... } — вернётся пустая страница
+```
+
+### `queryToOdataString(query): string`
+
+Объект → query string. Берёт только ключи с `$`, пропускает `null` / `undefined`.
+
+```ts
+queryToOdataString({ $top: 5, $filter: "name eq 'Ann'", page: 2 });
+// → "$top=5&$filter=name%20eq%20'Ann'"   (page отброшен)
+```
+
+### `mapToObject(map, deep?): Record<K, V>`
+
+`Map` параметров → объект для `setParameters`. `null` / `undefined` → `{}`.
+
+```ts
+mapToObject(new Map([['p0', 'Ann'], ['p1', 18]]));  // → { p0: 'Ann', p1: 18 }
+```
+
+### `processIncludes(qb, odataQuery, alias, parentMetadata, nested?): SelectQueryBuilder`
+
+Разворачивает `includes` в `LEFT JOIN`. Вложенные `$top` / `$skip` переносятся в SQL
+оконной функцией в условии соединения, если передан аргумент `nested`; связи, страницу
+которых вырезал SQL, складываются в `nested.paginated`, чтобы `applyNestedPagination`
+не применил срез второй раз.
+
+### `processSearch(qb, metadata, $search, alias, options?): void`
+
+Добавляет условия `$search`. Мутирует построитель на месте, ничего не возвращает.
+По умолчанию ищет по всем скалярным колонкам корня; `options.fields` сужает набор и
+допускает пути через связи (`'author/name'`), `options.mode` переключает сравнение
+на полнотекстовое.
+
+### Списки типов колонок для `$search`
+
+```ts
+searchableTextColumnTypes    // varchar, text, char, citext, nvarchar, string, ...  → LIKE
+searchableNumberColumnTypes  // int, bigint, decimal, float, real, number, ...      → равенство
+```
+
+Оба — белые списки. Осознанно не включены `uuid`, `json`, `enum`, `date`, `bytea`.

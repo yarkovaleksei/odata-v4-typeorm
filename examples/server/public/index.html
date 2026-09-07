@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Конструктор OData-запросов</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <!--
+      Выбранная тема применяется до первой отрисовки: модуль со скриптами грузится
+      отложенно, и страница успевала бы мигнуть системной темой. Здесь только это,
+      всё остальное — в theme.ts.
+    -->
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('theme');
+
+        if (savedTheme) {
+          document.documentElement.dataset.theme = savedTheme;
+        }
+      } catch {
+        // Хранилище недоступно (приватный режим, запрет на данные сайтов) — тема останется системной.
+      }
+    </script>
+  </head>
+
+  <body>
+    <header class="page-header">
+      <div>
+        <h1>Конструктор OData-запросов</h1>
+        <p class="subtitle">
+          Соберите запрос полями формы, посмотрите на получившийся URL и выполните его. Данные живые
+          — их отдаёт
+          <code>odata-v4-typeorm-improved</code> поверх TypeORM и SQLite.
+        </p>
+      </div>
+      <button id="theme" type="button" class="theme-toggle" aria-live="polite"></button>
+    </header>
+
+    <main class="layout">
+      <section class="panel builder" aria-label="Параметры запроса">
+        <div class="field">
+          <label for="resource">Сущность</label>
+          <select id="resource"></select>
+          <p class="hint" id="resource-hint"></p>
+        </div>
+
+        <div class="field">
+          <label for="filter">
+            $filter
+            <span class="tag">условие отбора</span>
+          </label>
+          <textarea
+            id="filter"
+            rows="4"
+            spellcheck="false"
+            placeholder="contains(title,'SQL') and id gt 2"
+          ></textarea>
+          <ul class="hint">
+            <li>Сравнения: <code>eq ne gt ge lt le</code></li>
+            <li>Логика: <code>and or not</code></li>
+            <li>Арифметика: <code>add sub mul div mod</code></li>
+            <li>
+              Функции:
+              <code>contains startswith tolower length substring replace year cast</code>
+            </li>
+          </ul>
+        </div>
+
+        <div class="field">
+          <label for="select">
+            $select
+            <span class="tag">колонки сущности</span>
+          </label>
+          <input id="select" spellcheck="false" list="select-options" />
+          <datalist id="select-options"></datalist>
+          <div id="select-chips" class="chips" aria-label="Поля выбранной сущности"></div>
+        </div>
+
+        <div class="field">
+          <label for="expand">
+            $expand
+            <span class="tag">связи сущности</span>
+          </label>
+          <input id="expand" spellcheck="false" list="expand-options" />
+          <datalist id="expand-options"></datalist>
+          <div id="expand-chips" class="chips" aria-label="Связи выбранной сущности"></div>
+        </div>
+
+        <div class="field">
+          <label for="compute">
+            $compute
+            <span class="tag">выражение под именем</span>
+          </label>
+          <input id="compute" spellcheck="false" placeholder="pages mul 2 as doubled" />
+          <p class="hint">
+            Даёт выражению имя, и дальше имя работает как поле — в
+            <code>$filter</code>, <code>$orderby</code> и <code>$select</code>. Справа от
+            <code>as</code> стоит то же выражение, что и в <code>$filter</code>. Несколько имён —
+            через запятую. Названное в <code>$select</code> значение приходит отдельным свойством, а
+            его тип задаёт драйвер СУБД: библиотека не приводит его, потому что колонки у выражения
+            нет.
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="orderby">
+            $orderby
+            <span class="tag">поле и направление</span>
+          </label>
+          <div class="field-row">
+            <input id="orderby" spellcheck="false" list="orderby-options" />
+            <datalist id="orderby-options"></datalist>
+            <select id="orderby-direction" aria-label="Направление сортировки">
+              <option value="asc">asc — по возрастанию</option>
+              <option value="desc">desc — по убыванию</option>
+            </select>
+          </div>
+        </div>
+
+        <!--
+          У `max` здесь нет значения: потолок страницы задаёт сервер отдельно для каждой
+          сущности (`maxTop`), и страница проставляет его из ответа `/api/$schema` —
+          см. renderFieldHints. Зашитая в разметку сотня расходилась бы с /api/reviews,
+          где потолок занижен до трёх.
+        -->
+        <div class="field">
+          <label for="top">$top <span class="tag">кол-во записей на страницу</span></label>
+          <input id="top" type="number" min="0" placeholder="—" />
+          <p class="hint" id="top-hint"></p>
+        </div>
+
+        <div class="field">
+          <label for="skip">$skip <span class="tag">сколько элементов пропустить</span></label>
+          <input id="skip" type="number" min="0" placeholder="—" />
+        </div>
+
+        <div class="field">
+          <label for="search">$search <span class="tag">поисковый запрос</span></label>
+          <input id="search" spellcheck="false" placeholder="—" />
+        </div>
+
+        <div class="field">
+          <label class="checkbox">
+            <input id="count" type="checkbox" />
+            <span>$count — вернуть <code>{ items, count }</code> вместо массива</span>
+          </label>
+          <p class="hint">
+            Выключен по умолчанию, как требует OData: отсутствующий
+            <code>$count</code> означает <code>false</code>, и ответом будет обычный массив.
+            Включите, чтобы получить общее число строк по фильтрам — без учёта <code>$top</code> и
+            <code>$skip</code>.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button id="run" type="button" class="primary">Выполнить</button>
+          <button id="reset" type="button">Очистить</button>
+        </div>
+      </section>
+
+      <section class="panel result" aria-label="Результат">
+        <div class="field">
+          <label for="url">Итоговый URL</label>
+          <div class="url-row">
+            <code id="url" class="url"></code>
+            <button id="copy" type="button" title="Скопировать">Копировать</button>
+          </div>
+        </div>
+
+        <div class="status-row">
+          <span id="status" class="status status--idle">готов</span>
+          <span id="timing" class="timing"></span>
+        </div>
+
+        <pre id="output" class="output">Нажмите «Выполнить», чтобы увидеть ответ.</pre>
+      </section>
+
+      <section class="panel examples" aria-label="Готовые примеры">
+        <h2>Примеры <span id="examples-resource" class="tag"></span></h2>
+        <p class="hint">
+          Примеры собираются под выбранную сущность: по её полям, связям и реальным значениям из
+          базы — поэтому каждый возвращает непустой результат. Нажмите — он подставится в форму и
+          выполнится. Отмеченные
+          <span class="tag tag--error">400</span> показывают, как библиотека отвергает
+          неподдерживаемое, вместо того чтобы молча вернуть не те данные.
+        </p>
+        <ul id="examples" class="examples-list"></ul>
+      </section>
+    </main>
+
+    <!--
+      Модули ES напрямую, без сборщика. Исходники — TypeScript в examples/server/client/,
+      компиляция запускается при старте сервера (см. buildClient в server.ts).
+    -->
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>

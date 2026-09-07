@@ -1,0 +1,16 @@
+# Контекст сборки должен быть минимальным: в образ копируется только entrypoint,
+# всё остальное монтируется при запуске (см. compose.yaml).
+#
+# node_modules исключён отдельно и принципиально: он содержит нативные бинарники
+# (sqlite3, pg, mysql2), собранные под платформу хоста, и в linux-контейнере
+# они непригодны.
+
+node_modules
+build
+coverage
+.git
+.github
+examples/*/node_modules
+examples/*/dist
+*.log
+*.tgz

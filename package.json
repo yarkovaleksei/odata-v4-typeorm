@@ -1,17 +1,72 @@
 {
   "name": "odata-v4-typeorm-improved",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "description": "OData to TypeORM query compiler",
   "main": "build/src/lib/index.js",
-  "typings": "build/src/lib/index",
+  "types": "build/src/lib/index.d.ts",
+  "typings": "build/src/lib/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./build/esm/src/lib/index.d.ts",
+        "default": "./build/esm/src/lib/index.js"
+      },
+      "require": {
+        "types": "./build/src/lib/index.d.ts",
+        "default": "./build/src/lib/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "build/src/lib",
+    "build/esm/src/lib",
+    "build/esm/package.json",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "docs/README.md",
+    "docs/api.md",
+    "docs/recipes.md",
+    "docs/recipes-express.md",
+    "docs/recipes-nestjs.md",
+    "docs/odata-support.md",
+    "docs/architecture.md"
+  ],
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24.11.0"
+  },
+  "sideEffects": false,
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "docs:check": "ts-node scripts/docs-check.ts",
+    "engines:check": "ts-node scripts/check-engines.ts",
     "test:unit": "jest",
-    "build": "rm -rf ./build && tsc --project tsconfig.build.json",
+    "test:postgres": "TEST_DB=postgres jest",
+    "test:mysql": "TEST_DB=mysql jest",
+    "test:coverage": "jest --coverage",
+    "test:all": "yarn test:unit && yarn test:postgres && yarn test:mysql",
+    "verify": "yarn lint && yarn format:check && yarn docs:check && yarn engines:check && yarn test:unit && yarn build && yarn build:check",
+    "build": "rm -rf ./build && yarn build:cjs && yarn build:esm",
+    "build:cjs": "tsc --project tsconfig.build.json",
+    "build:esm": "tsc --project tsconfig.esm.json && ts-node scripts/build-esm.ts",
+    "build:check": "ts-node scripts/check-package.ts",
+    "docker:build": "docker compose build tests",
+    "docker:test": "docker compose run --rm tests",
+    "docker:test:all": "docker compose run --rm tests yarn test:all",
+    "docker:lint": "docker compose run --rm tests yarn lint",
+    "docker:sh": "docker compose run --rm tests sh",
+    "docker:down": "docker compose down -v",
+    "db:up": "docker compose up -d --wait postgres mysql",
+    "db:down": "docker compose down postgres mysql",
     "release": "yarn build && npm publish",
     "release:beta": "yarn build && npm publish --tag beta",
-    "server": "cd ./examples/server && yarn install && yarn serve"
+    "server": "nodemon --watch examples/server/src --watch examples/server/client --watch src/lib --ext ts --exec \"ts-node --project examples/server/tsconfig.json examples/server/src/server.ts\"",
+    "server:typecheck": "tsc --noEmit --project examples/server/tsconfig.json && tsc --noEmit --project examples/server/tsconfig.client.json",
+    "client:build": "tsc --project examples/server/tsconfig.client.json"
   },
   "repository": {
     "type": "git",
@@ -33,32 +88,32 @@
     "url": "https://github.com/yarkovaleksei/odata-v4-typeorm-improved/issues"
   },
   "homepage": "https://github.com/yarkovaleksei/odata-v4-typeorm-improved#readme",
-  "dependencies": {
-    "odata-v4-parser": "^0.1.29",
-    "odata-v4-sql": "^0.1.2"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/config": "^4.4.0",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.5.0",
-    "@types/pg": "^8.20.0",
-    "config": "^4.4.1",
-    "eslint": "^10.1.0",
-    "eslint-plugin-typeorm-typescript": "^0.5.3",
+    "@types/node": "^26.4.1",
+    "@types/pg": "^8.23.1",
+    "better-sqlite3": "^12.11.1",
+    "eslint": "^10.10.0",
+    "eslint-plugin-typeorm-typescript": "^0.5.4",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.11.1",
     "install-peers-cli": "^2.2.0",
-    "jest": "^30.3.0",
-    "jiti": "^2.6.1",
-    "odata-v4-server": "0.2.13",
-    "pg": "^8.20.0",
-    "sqlite3": "^6.0.1",
-    "ts-jest": "^29.4.6",
-    "typeorm": "^0.3.28",
-    "typescript": "^6.0.2",
-    "typescript-eslint": "^8.57.2"
+    "jest": "^30.5.1",
+    "jiti": "^2.7.0",
+    "mysql2": "^3.24.3",
+    "nodemon": "^3.1.14",
+    "pg": "^8.23.0",
+    "prettier": "^3.9.6",
+    "ts-jest": "^29.4.12",
+    "ts-node": "^10.9.2",
+    "typeorm": "^1.1.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.69.0"
   },
   "peerDependencies": {
-    "typeorm": "^0.3.28"
+    "typeorm": "^1.1.1"
   }
 }

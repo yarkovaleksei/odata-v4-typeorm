@@ -41,7 +41,7 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: '*',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           parameters: new Map([['param1', 'value1']]),
         },
       ],
@@ -50,7 +50,7 @@ describe('processIncludes', () => {
     expect(mockQueryBuilder.leftJoinAndSelect).toHaveBeenCalledWith(
       `${alias}.items`,
       'itemsAlias',
-      'items.id = parent.id',
+      'itemsAlias.id = parent.id',
       { param1: 'value1' }
     );
     expect(mockQueryBuilder.addSelect).not.toHaveBeenCalled();
@@ -63,7 +63,7 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: 'id, name',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           parameters: new Map(),
         },
       ],
@@ -80,15 +80,17 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: '*',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           orderby: 'name asc, created desc',
         },
       ],
     } as Partial<TypeOrmVisitor>;
     processIncludes(mockQueryBuilder, odataQuery, alias, parentMetadata);
     expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledTimes(2);
-    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('name', 'asc');
-    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('created', 'desc');
+    // Направление нормализуется к верхнему регистру: TypeORM сверяет его со списком
+    // ['ASC', 'DESC'] и на 'asc' бросает TypeORMError — здесь это скрывал мок.
+    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('name', 'ASC');
+    expect(mockQueryBuilder.addOrderBy).toHaveBeenCalledWith('created', 'DESC');
   });
 
   it('должен игнорировать orderby, если он равен "1"', () => {
@@ -98,7 +100,7 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: '*',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           orderby: '1',
         },
       ],
@@ -119,13 +121,13 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: '*',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           includes: [
             {
               navigationProperty: 'subItems',
               alias: 'subAlias',
               select: 'id',
-              where: 'typeorm_query.parentId = itemsAlias.id',
+              where: 'subAlias.parentId = itemsAlias.id',
             },
           ],
         },

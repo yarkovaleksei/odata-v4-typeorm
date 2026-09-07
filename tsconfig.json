@@ -1,5 +1,12 @@
+// Конфигурация для разработки: по ней работают редактор, ts-jest и ts-node.
+// Сборку пакета описывает отдельный tsconfig.build.json — он строже по составу файлов.
 {
   "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "sourceMap": true,
     "target": "es6",
     "module": "commonjs",
@@ -12,6 +19,11 @@
     "rootDir": ".",
     "types": ["@types/jest", "@types/node"]
   },
-  "include": ["src/**/*", "src/test/**/*"],
+  // `scripts` включён наравне с исходниками: иначе редактор не относит эти файлы
+  // ни к какому проекту, разбирает их с настройками по умолчанию — без `types` отсюда —
+  // и подчёркивает импорты встроенных модулей Node как несуществующие. Заодно на них
+  // начинают действовать флаги строгости, а `npx tsc --noEmit` проверяет и их тоже.
+  // В npm-пакет каталог всё равно не попадает: состав сборки задаёт tsconfig.build.json.
+  "include": ["src/**/*", "src/test/**/*", "scripts/**/*"],
   "exclude": ["build", "node_modules", "examples", "src/**/*.(test|spec).ts"]
 }

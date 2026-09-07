@@ -33,8 +33,161 @@ jobs:
       - name: Run ESLint
         run: yarn lint
 
+      # Prettier три года лежал в репозитории конфигом без самого пакета: формат
+      # ни во что не упирался и разъезжался. Документация из проверки исключена
+      # намеренно — см. `.prettierignore`.
+      - name: Check formatting
+        run: yarn format:check
+
+      # Документация описывает контракт, а гниёт молча: переименованный файл, убранный
+      # экспорт или исчезнувший скрипт не ломают ни тесты, ни линтер. Проверка на одной
+      # версии Node: она читает файлы, а не исполняет код библиотеки.
+      - name: Check documentation
+        if: matrix.node-version == '22.x'
+        run: yarn docs:check
+
+      # Зависимость, требующая Node новее нашей нижней границы, ломает установку — но только
+      # на самой старой версии матрицы, и разработчик на свежей Node этого не увидит.
+      # Проверка сравнивает `engines` каждой прямой зависимости с минимумом из нашего
+      # `engines.node` и называет виновника, не дожидаясь падения установки.
+      - name: Check dependency engines
+        if: matrix.node-version == '22.x'
+        run: yarn engines:check
+
       - name: Run unit tests
         run: yarn test:unit
 
+      # Покрытие считается один раз, а не на каждой версии Node: оно зависит от кода,
+      # а не от рантайма, и тройной прогон с инструментированием только замедлил бы CI.
+      # Пороги заданы в jest.config.js — там же объяснено, почему именно такие.
+      - name: Check coverage thresholds
+        if: matrix.node-version == '22.x'
+        run: yarn test:coverage
+
       - name: Run build library
         run: yarn build
+
+      # Двойная публикация (CommonJS + модули ES) ломается тихо: карта exports может указывать
+      # на несуществующий файл, а в модулях ES — не хватить расширения в импорте. Тесты идут
+      # через ts-jest и настоящий пакет не грузят, поэтому он загружается здесь, обоими способами.
+      - name: Check package loads in both formats
+        run: yarn build:check
+
+      # Демо-сервер годами оставался сломанным именно потому, что его никто не собирал.
+      # Проверка типов дешёвая и не даёт ему разойтись с библиотекой снова.
+      - name: Typecheck example server
+        run: yarn server:typecheck
+
+      # Состав пакета задан белым списком `files`, и шаг сторожит две регрессии.
+      # Первая: exclude в tsconfig.build.json когда-то использовал шаблон `*.(test|spec).ts`,
+      # который TypeScript не понимает (групп с альтернативой в его glob нет), и
+      # скомпилированные тесты молча уезжали в npm-пакет. Вторая: вернуть в `files`
+      # каталог `docs` целиком проще всего по невнимательности, а вместе с ним уедут
+      # и документы для сопровождающего.
+      - name: Check package contents
+        run: |
+          FILES=$(npm pack --dry-run --json | node -e "
+            let d = '';
+            process.stdin.on('data', (c) => (d += c));
+            process.stdin.on('end', () => {
+              const pkg = JSON.parse(d)[0];
+              const paths = pkg.files.map((f) => f.path);
+              // Документы, адресованные сопровождающему: журнал аудита, журнал работ
+              // и инструкции по прогонам. Потребителю пакета они не нужны — это 135 КБ
+              // текста про версию, которую он никогда не установит.
+              const maintainerDocs = /^docs\/(audit|roadmap|development)\.md$/;
+              const bad = paths.filter(
+                (p) => /\.(test|spec)\./.test(p) || p.includes('/src/test/') || maintainerDocs.test(p)
+              );
+              // Обе сборки обязаны быть в пакете: без одной из них карта exports указывает
+              // в пустоту для половины потребителей.
+              const cjs = paths.filter((p) => p.startsWith('build/src/lib/')).length;
+              const esm = paths.filter((p) => p.startsWith('build/esm/src/lib/')).length;
+              console.log(JSON.stringify({ total: pkg.entryCount, bad, cjs, esm }));
+            });
+          ")
+          echo "$FILES"
+          node -e "
+            const { total, bad, cjs, esm } = JSON.parse(process.argv[1]);
+            if (bad.length) {
+              console.error('В пакет попало лишнее:\n' + bad.join('\n'));
+              process.exit(1);
+            }
+            if (!cjs || !esm) {
+              console.error('В пакете нет одной из сборок: cjs=' + cjs + ', esm=' + esm);
+              process.exit(1);
+            }
+            console.log('Пакет чист: ' + total + ' файлов, тестов нет; сборки CJS и ES на месте');
+          " "$FILES"
+  # Матрица совместимости с OData на реальных СУБД.
+  #
+  # Основная джоба гоняет тесты на SQLite в памяти — быстро и без внешних зависимостей.
+  # Но трансляция функций OData зависит от диалекта (`LENGTH` против `LEN`, `EXTRACT`
+  # против `strftime`), и одного SQLite мало: строка SQL может выглядеть правильно
+  # и при этом не выполниться. Здесь тот же набор прогоняется на PostgreSQL и MySQL.
+  #
+  # Node берётся одной версии: проверяется поведение СУБД, а не совместимость с рантаймом —
+  # это уже сделала джоба выше.
+  database-matrix:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Падение на одной СУБД не должно скрывать результат на другой.
+      fail-fast: false
+      matrix:
+        include:
+          - database: postgres
+            image: postgres:18-alpine
+            port: 5432
+          - database: mysql
+            image: mysql:8.4
+            port: 3306
+
+    services:
+      database:
+        image: ${{ matrix.image }}
+        env:
+          # PostgreSQL
+          POSTGRES_USER: odata
+          POSTGRES_PASSWORD: odata
+          POSTGRES_DB: odata_test
+          # MySQL
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_USER: odata
+          MYSQL_PASSWORD: odata
+          MYSQL_DATABASE: odata_test
+        ports:
+          - 3306:3306
+          - 5432:5432
+        # Одна проверка на оба образа: ждём, пока порт начнёт принимать соединения.
+        options: >-
+          --health-cmd "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/${{ matrix.port }}'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'yarn'
+
+      - name: Enable Corepack (for Yarn)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run OData matrix on ${{ matrix.database }}
+        env:
+          TEST_DB: ${{ matrix.database }}
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: ${{ matrix.port }}
+          TEST_DB_USER: odata
+          TEST_DB_PASSWORD: odata
+          TEST_DB_NAME: odata_test
+        run: yarn test:unit

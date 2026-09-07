@@ -1,0 +1,2445 @@
+{
+  "info": {
+    "name": "odata-v4-typeorm-improved",
+    "description": "Запросы к демо-серверу из examples/server.\n\nЗапуск: `yarn server` в корне репозитория. Интерактивный конструктор тех же запросов — на http://localhost:3001/\n\nСхема и данные — те же, что в тестах (src/test/fixtures): каталог книг с авторами, издательствами, разделами, метками и рецензиями.\n\nПапка «Ошибки» показывает, как библиотека отвергает неподдерживаемое: она никогда не выполняет запрос частично и не возвращает молча не те данные.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3001"
+    }
+  ],
+  "item": [
+    {
+      "name": "Основное",
+      "item": [
+        {
+          "name": "Все записи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": []
+            },
+            "description": "Ответ по умолчанию — массив: отсутствующий $count по OData v4 (раздел 11.2.5.5) означает false, и лишний COUNT(*) не выполняется."
+          },
+          "response": []
+        },
+        {
+          "name": "Со счётчиком",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$count=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$count",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "С $count=true форма ответа меняется на { items, count } и выполняется второй запрос — COUNT(*) по тем же фильтрам."
+          },
+          "response": []
+        },
+        {
+          "name": "Схема сервиса ($metadata, CSDL XML)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/$metadata",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "$metadata"
+              ],
+              "query": []
+            },
+            "description": "Стандартный документ OData в CSDL XML: имена наборов, типы полей, связи. Именно его запрашивают ra-data-odata-server, @odata/client и Excel — ответ приходит с Content-Type: application/xml и OData-Version: 4.0."
+          },
+          "response": []
+        },
+        {
+          "name": "Схема всех сущностей ($schema)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/$schema",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "$schema"
+              ],
+              "query": []
+            },
+            "description": "Выжимка для конструктора запросов в JSON. Формат собственный, поэтому путь $schema, а не $metadata."
+          },
+          "response": []
+        },
+        {
+          "name": "Схема одной сущности ($schema)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books/$schema",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books",
+                "$schema"
+              ],
+              "query": []
+            },
+            "description": "Поля и связи — их же подставляет конструктор в подсказки."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$select и $expand",
+      "item": [
+        {
+          "name": "Выбор полей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$select=id,title",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,title"
+                }
+              ]
+            },
+            "description": "Выбираются только указанные колонки."
+          },
+          "response": []
+        },
+        {
+          "name": "Связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$select=id,title&$expand=author,publisher",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,title"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author,publisher"
+                }
+              ]
+            },
+            "description": "Две связи «многие к одному» одним запросом: один LEFT JOIN на каждую."
+          },
+          "response": []
+        },
+        {
+          "name": "Вложенный $select",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$select=id,title&$expand=author($select=name)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,title"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author($select=name)"
+                }
+              ]
+            },
+            "description": "Ограничение колонок внутри связи. Ключ TypeORM добавляет сам — он нужен, чтобы разложить плоский результат JOIN по родителям."
+          },
+          "response": []
+        },
+        {
+          "name": "Связь «многие ко многим»",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$expand=tags&$filter=tags/label eq 'classic'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "tags"
+                },
+                {
+                  "key": "$filter",
+                  "value": "tags/label eq 'classic'"
+                }
+              ]
+            },
+            "description": "Метки лежат за таблицей связи. Книга с двумя метками не задваивается: TypeORM склеивает строки обратно по идентификатору."
+          },
+          "response": []
+        },
+        {
+          "name": "Связь «один к одному»",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$expand=details&$filter=details/isbn ne null",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "details"
+                },
+                {
+                  "key": "$filter",
+                  "value": "details/isbn ne null"
+                }
+              ]
+            },
+            "description": "В отличие от коллекции, здесь $expand даёт объект или null."
+          },
+          "response": []
+        },
+        {
+          "name": "Ссылка на саму себя",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/categories?$expand=children&$filter=parent eq null",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "categories"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "children"
+                },
+                {
+                  "key": "$filter",
+                  "value": "parent eq null"
+                }
+              ]
+            },
+            "description": "Раздел внутри раздела: JOIN таблицы с ней же, алиасы обязаны различаться."
+          },
+          "response": []
+        },
+        {
+          "name": "Двухуровневый $expand",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($expand=reviews)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($expand=reviews)"
+                }
+              ]
+            },
+            "description": "Три уровня связи: автор → книги → рецензии."
+          },
+          "response": []
+        },
+        {
+          "name": "Вложенный $orderby",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($orderby=id desc)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($orderby=id desc)"
+                }
+              ]
+            },
+            "description": "Сортировка внутри связи. Корневой $orderby применяется раньше — иначе сортировка связи управляла бы порядком авторов (дефект A-14)."
+          },
+          "response": []
+        },
+        {
+          "name": "Вложенная пагинация",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($orderby=id desc;$top=1)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($orderby=id desc;$top=1)"
+                }
+              ]
+            },
+            "description": "Срез связанных строк на каждого родителя. Обычным LIMIT это не выражается: в запросе с LEFT JOIN он действует на весь плоский результат, а не на группу строк одного родителя. Поэтому страницу вырезает оконная функция ROW_NUMBER() в условии соединения, и из базы поднимается только она. Там, где так нельзя (MySQL, незнакомый драйвер, вложенный $orderby по соседней связи, опция nestedPaginationInSql: false), библиотека возвращается к срезу над деревом сущностей — результат тот же."
+          },
+          "response": []
+        },
+        {
+          "name": "Счётчик связанных строк",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($count=true)&$select=id,name",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($count=true)"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name"
+                }
+              ]
+            },
+            "description": "Число связанных строк у каждого родителя. Приходит аннотацией рядом со связью — `books@odata.count`, — как того требует OData JSON (раздел 12): форма самой связи не меняется, `books` остаётся массивом. У автора без книг счётчик равен нулю, а не отсутствует: LEFT JOIN оставляет такого автора в выдаче, и клиент обязан отличать «книг нет» от «не считали»."
+          },
+          "response": []
+        },
+        {
+          "name": "Счётчик вместе со срезом связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($orderby=id desc;$top=1;$count=true)&$select=id,name",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($orderby=id desc;$top=1;$count=true)"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name"
+                }
+              ]
+            },
+            "description": "То, ради чего $count внутри $expand и просят: показать первую запись из скольких-то. Счётчик считает всю связь после вложенного $filter, но ДО вложенных $top и $skip — иначе он всегда равнялся бы размеру страницы и не сообщал бы ничего. Считает его скалярный подзапрос в SELECT: он не зависит ни от соединения, ни от окна, которое вырезает страницу."
+          },
+          "response": []
+        },
+        {
+          "name": "Поле связи в $select",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$select=id,title,author/name",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,title,author/name"
+                }
+              ]
+            },
+            "description": "Путь по связи прямо в $select: связь подключается сама, отдельный $expand не нужен, и в ответе у author остаётся только name. Добавлять при этом $expand=author не стоит — он затребует все колонки связи и перекроет сужение: получится author целиком."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$filter — сравнения и логика",
+      "item": [
+        {
+          "name": "Равенство",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=title eq 'Compiler Theory'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "title eq 'Compiler Theory'"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Неравенство и диапазон",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=id ge 2 and id le 4&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "id ge 2 and id le 4"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Логическое ИЛИ",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=id eq 1 or id eq 5&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "id eq 1 or id eq 5"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Скобки меняют приоритет",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=(id eq 1 or id eq 2) and id gt 1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "(id eq 1 or id eq 2) and id gt 1"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Отрицание",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=not (id eq 1) and id lt 4&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "not (id eq 1) and id lt 4"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "not связывает сильнее, чем and и or, как требует спецификация (раздел 5.1.1.9): not (X) and Y читается как (not X) and Y, отрицание относится только к первому условию. Внешние скобки не нужны — запись (not (id eq 1)) and id lt 4 означает ровно то же самое."
+          },
+          "response": []
+        },
+        {
+          "name": "Сравнение с null",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=bio eq null",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "bio eq null"
+                }
+              ]
+            },
+            "description": "Транслируется в IS NULL, а не в = NULL."
+          },
+          "response": []
+        },
+        {
+          "name": "Не null",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=bio ne null",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "bio ne null"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Булево поле",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=isActive eq false",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "isActive eq false"
+                }
+              ]
+            },
+            "description": "Колонка в базе называется is_active: имена свойств и колонок не совпадают, и путь обязан транслироваться."
+          },
+          "response": []
+        },
+        {
+          "name": "Фильтр по полю связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=author/name eq 'Ada'&$expand=author",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "author/name eq 'Ada'"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author"
+                }
+              ]
+            },
+            "description": "Фильтр и $expand по одной связи используют один и тот же JOIN-алиас (дефект A-02)."
+          },
+          "response": []
+        },
+        {
+          "name": "Путь через две связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=category/parent/name eq 'Science'&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "category/parent/name eq 'Science'"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Два перехода подряд: раздел книги и его родительский раздел."
+          },
+          "response": []
+        },
+        {
+          "name": "Обязательная связь",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=publisher/country eq 'US'&$expand=publisher",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "publisher/country eq 'US'"
+                },
+                {
+                  "key": "$expand",
+                  "value": "publisher"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Оператор in",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=name in ('Ada','Grace')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "name in ('Ada','Grace')"
+                }
+              ]
+            },
+            "description": "Список значений транслируется в SQL-оператор IN; значения уходят в параметры."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$filter — арифметика и функции",
+      "item": [
+        {
+          "name": "Арифметика",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=pages div 100 ge 3&$orderby=pages asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "pages div 100 ge 3"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "pages asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Остаток от деления",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=id mod 2 eq 0&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "id mod 2 eq 0"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "contains",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=contains(title,'Engine')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "contains(title,'Engine')"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "startswith и length",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=startswith(name,'A') and length(name) gt 3",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "startswith(name,'A') and length(name) gt 3"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "tolower",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=tolower(name) eq 'grace'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "tolower(name) eq 'grace'"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "substring",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=substring(title,0,6) eq 'Orphan'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "substring(title,0,6) eq 'Orphan'"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "concat",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=concat(name,'!') eq 'Ada!'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "concat(name,'!') eq 'Ada!'"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "replace",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=replace(bio,' ','_') eq 'Pioneer_of_computing'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "replace(bio,' ','_') eq 'Pioneer_of_computing'"
+                }
+              ]
+            },
+            "description": "Заменяются все вхождения, а не первое. Единственная строковая функция OData без диалектных расхождений: REPLACE с той же сигнатурой есть во всех пяти СУБД."
+          },
+          "response": []
+        },
+        {
+          "name": "indexof",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=indexof(title,'Theory') gt 0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "indexof(title,'Theory') gt 0"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "round",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=round(rating) eq 4",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "round(rating) eq 4"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Функции даты",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=year(registeredAt) eq 2020",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "year(registeredAt) eq 2020"
+                }
+              ]
+            },
+            "description": "SQL подбирается под СУБД: strftime в SQLite, EXTRACT в PostgreSQL."
+          },
+          "response": []
+        },
+        {
+          "name": "Колонка времени",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/details?$filter=releaseTime ne null&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "details"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "releaseTime ne null"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Тип time есть только у выходных данных книги."
+          },
+          "response": []
+        },
+        {
+          "name": "fractionalseconds",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=fractionalseconds(registeredAt) lt 1&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "fractionalseconds(registeredAt) lt 1"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Дробная часть секунд лежит в диапазоне [0, 1), поэтому условие выполняется для любой непустой даты. У колонки, объявленной без дробной части, значение всегда нулевое — это отсутствие данных в хранилище, а не свойство трансляции. Форма SQL разная в каждой СУБД: EXTRACT, MICROSECOND, strftime, DATEPART."
+          },
+          "response": []
+        },
+        {
+          "name": "totalseconds",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=age lt totalseconds(duration'PT40S')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "age lt totalseconds(duration'PT40S')"
+                }
+              ]
+            },
+            "description": "Литерал длительности сворачивается в число ещё при компиляции, поэтому функция работает и в СУБД без типа интервала. Над колонкой она требует типа длительности и доступна только в PostgreSQL и Oracle."
+          },
+          "response": []
+        },
+        {
+          "name": "cast — число в строку",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=cast(age,Edm.String) eq '36'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "cast(age,Edm.String) eq '36'"
+                }
+              ]
+            },
+            "description": "Приведение поддержано в тотальном подмножестве — там, где CAST не может провалиться. Число в строку тотально везде, а имя типа в SQL у каждой СУБД своё: TEXT в PostgreSQL и SQLite, CHAR в MySQL, NVARCHAR(MAX) в MS SQL."
+          },
+          "response": []
+        },
+        {
+          "name": "cast — подстрока в числе",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=contains(cast(age,Edm.String),'4')&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "contains(cast(age,Edm.String),'4')"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "То, ради чего cast и применяется в реальных запросах: искать подстроку в числовой колонке иначе нечем."
+          },
+          "response": []
+        },
+        {
+          "name": "cast — расширение числа",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=cast(age,Edm.Int64) gt 40",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "cast(age,Edm.Int64) gt 40"
+                }
+              ]
+            },
+            "description": "Расширяющее приведение тотально: значение помещается в тип назначения при любом входе. Обратное направление (Edm.Int64 → Edm.Int32) отвергается — оно переполняется, а вернуть на этом месте null, как требует спецификация, в переносимом SQL нечем."
+          },
+          "response": []
+        },
+        {
+          "name": "mindatetime и maxdatetime",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=registeredAt ge mindatetime() and registeredAt le maxdatetime()&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "registeredAt ge mindatetime() and registeredAt le maxdatetime()"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Сторожевые значения: диапазон покрывает любое хранимое значение, поэтому условие истинно для каждой непустой даты. Границей служит диапазон хранения самой СУБД — строк вне него не бывает, поэтому это точный ответ, а не приближение. В MySQL нижняя граница 1000-01-01: значение вне диапазона MySQL превращает в сравнении в NULL, то есть начало эры EDM молча отфильтровало бы всё."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$filter — лямбда-операторы",
+      "item": [
+        {
+          "name": "any с условием",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/any(b: b/pages gt 400)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/any(b: b/pages gt 400)"
+                }
+              ]
+            },
+            "description": "Есть хотя бы одна книга длиннее 400 страниц. Разворачивается в EXISTS, поэтому автор возвращается один раз, сколько бы книг ни подошло."
+          },
+          "response": []
+        },
+        {
+          "name": "any без условия",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/any()",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/any()"
+                }
+              ]
+            },
+            "description": "У автора вообще есть книги."
+          },
+          "response": []
+        },
+        {
+          "name": "all",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/all(b: b/pages gt 200)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/all(b: b/pages gt 200)"
+                }
+              ]
+            },
+            "description": "Все книги длиннее 200 страниц. Автор без книг проходит: «все элементы пустой коллекции удовлетворяют условию» истинно."
+          },
+          "response": []
+        },
+        {
+          "name": "Путь до коллекции через две связи",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/reviews/any(r: r/score eq 5)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/reviews/any(r: r/score eq 5)"
+                }
+              ]
+            },
+            "description": "Есть книга с рецензией на пятёрку."
+          },
+          "response": []
+        },
+        {
+          "name": "Вложенная лямбда",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/any(b: b/reviews/any(r: r/score eq 5))",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/any(b: b/reviews/any(r: r/score eq 5))"
+                }
+              ]
+            },
+            "description": "То же самое вложенными лямбдами: внутренняя считает связи от книги."
+          },
+          "response": []
+        },
+        {
+          "name": "Лямбда по связи «многие ко многим»",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=tags/any(t: t/label eq 'classic')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "tags/any(t: t/label eq 'classic')"
+                }
+              ]
+            },
+            "description": "Подзапрос проходит через таблицу связей."
+          },
+          "response": []
+        },
+        {
+          "name": "Путь через связь внутри тела — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=books/any(b: b/author/name eq 'Ada')",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "books/any(b: b/author/name eq 'Ada')"
+                }
+              ]
+            },
+            "description": "Не поддержано: потребовало бы ещё одного соединения внутри подзапроса. Тот же смысл выражается вложенной лямбдой."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Сортировка и пагинация",
+      "item": [
+        {
+          "name": "Сортировка",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$orderby=title asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$orderby",
+                  "value": "title asc"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Сортировка по двум полям",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$orderby=author/name asc,id desc&$expand=author",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$orderby",
+                  "value": "author/name asc,id desc"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Страница",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$orderby=id asc&$top=2&$skip=2",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                },
+                {
+                  "key": "$top",
+                  "value": "2"
+                },
+                {
+                  "key": "$skip",
+                  "value": "2"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Пустая страница со счётчиком",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$top=0&$count=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "0"
+                },
+                {
+                  "key": "$count",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "$top=0 по OData v4 — корректный запрос пустой страницы, а не «лимита нет»."
+          },
+          "response": []
+        },
+        {
+          "name": "Усечение до maxTop",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/reviews?$top=500&$count=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "reviews"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "500"
+                },
+                {
+                  "key": "$count",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Запрос сверх потолка усекается, а не отвергается: в ответе 200, а не 400. Демо ставит maxTop: 100 везде, кроме /api/reviews — там он занижен до 3, иначе на пяти строках усечение неотличимо от его отсутствия. С $count=true разница видна в одном ответе: в items три записи, а count по-прежнему 5 — потолок режет страницу, а не выборку. Тот же пример есть и в конструкторе запросов: он показывает его ровно для тех сущностей, где потолок меньше числа строк."
+          },
+          "response": []
+        },
+        {
+          "name": "Сортировка по полю связи со страницей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$orderby=books/pages asc&$top=2",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$orderby",
+                  "value": "books/pages asc"
+                },
+                {
+                  "key": "$top",
+                  "value": "2"
+                }
+              ]
+            },
+            "description": "Связь присоединяется только ради сортировки и в ответе не появляется. Раньше такой запрос не выполнялся вовсе: пагинация с соединением ссылается на колонку сортировки, а её не было в выборке (дефект A-18)."
+          },
+          "response": []
+        },
+        {
+          "name": "Страница без первичного ключа в $select",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$select=name&$expand=books&$top=2&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "name"
+                },
+                {
+                  "key": "$expand",
+                  "value": "books"
+                },
+                {
+                  "key": "$top",
+                  "value": "2"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Форма ответа задаётся одним $select и от $top не зависит: ключ и колонка сортировки дописываются в запрос ради SQL и убираются из ответа (дефекты A-17 и A-18)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$compute",
+      "item": [
+        {
+          "name": "Имя выражения в $filter",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul 2 as doubled&$filter=doubled gt 500",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul 2 as doubled"
+                },
+                {
+                  "key": "$filter",
+                  "value": "doubled gt 500"
+                }
+              ]
+            },
+            "description": "Справа от as стоит обычное выражение $filter — новой грамматики опция не вводит. Имя подставляется скомпилированным SQL там, где встретилось."
+          },
+          "response": []
+        },
+        {
+          "name": "Имя выражения в $orderby",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul -1 as inverted&$orderby=inverted asc&$select=id,title,pages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul -1 as inverted"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "inverted asc"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,title,pages"
+                }
+              ]
+            },
+            "description": "Сортировка по вычисленному значению: страницы по убыванию, записанные через возрастание отрицательного."
+          },
+          "response": []
+        },
+        {
+          "name": "Вычисленное значение в ответе",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul 2 as doubled&$select=title,doubled",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul 2 as doubled"
+                },
+                {
+                  "key": "$select",
+                  "value": "title,doubled"
+                }
+              ]
+            },
+            "description": "Вычисленное значение приходит отдельным свойством. Тип задаёт драйвер СУБД: колонки в сущности у выражения нет, приводить не по чему — в MySQL число придёт строкой. Первичный ключ библиотека дописывает в выборку сама (по нему значение находит свою строку) и убирает из ответа: форму ответа задаёт один $select."
+          },
+          "response": []
+        },
+        {
+          "name": "Строковое выражение",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=concat(name, ' (автор)') as label&$select=id,label&$orderby=label asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "concat(name, ' (автор)') as label"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,label"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "label asc"
+                }
+              ]
+            },
+            "description": "В выражении доступны все функции $filter, а не только арифметика."
+          },
+          "response": []
+        },
+        {
+          "name": "Несколько имён сразу",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul 2 as doubled, pages div 2 as half&$filter=doubled gt 400 and half lt 200&$select=title,doubled,half",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul 2 as doubled, pages div 2 as half"
+                },
+                {
+                  "key": "$filter",
+                  "value": "doubled gt 400 and half lt 200"
+                },
+                {
+                  "key": "$select",
+                  "value": "title,doubled,half"
+                }
+              ]
+            },
+            "description": "Имена перечисляются через запятую и работают независимо друг от друга."
+          },
+          "response": []
+        },
+        {
+          "name": "Путь через связь «многие к одному»",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=author/age mul 2 as authorAge&$select=title,authorAge&$orderby=id asc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "author/age mul 2 as authorAge"
+                },
+                {
+                  "key": "$select",
+                  "value": "title,authorAge"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                }
+              ]
+            },
+            "description": "Связь присоединяется автоматически, как и в $filter. У книги без автора значение — null: LEFT JOIN, а не INNER."
+          },
+          "response": []
+        },
+        {
+          "name": "Имя видно из тела лямбды",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=age mul 5 as threshold&$filter=books/any(b: b/pages gt threshold)&$select=id,name,age",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "age mul 5 as threshold"
+                },
+                {
+                  "key": "$filter",
+                  "value": "books/any(b: b/pages gt threshold)"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name,age"
+                }
+              ]
+            },
+            "description": "Внутри лямбды путь с переменной относится к книге, а имя без переменной — к внешней сущности, значит и к её $compute."
+          },
+          "response": []
+        },
+        {
+          "name": "Вместе с $expand и страницей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=age mul 2 as doubled&$select=id,name,doubled&$expand=books&$orderby=id asc&$top=2&$count=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "age mul 2 as doubled"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name,doubled"
+                },
+                {
+                  "key": "$expand",
+                  "value": "books"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "id asc"
+                },
+                {
+                  "key": "$top",
+                  "value": "2"
+                },
+                {
+                  "key": "$count",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "У автора с двумя книгами в плоском результате две строки, а сущность одна: значение находит её по ключу, а не по номеру строки. count при этом считает авторов, а не строки соединения."
+          },
+          "response": []
+        },
+        {
+          "name": "Сортировка по псевдониму вместе со связью и страницей",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$compute=pages mul -1 as inverted&$orderby=inverted asc&$expand=author&$top=3",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "pages mul -1 as inverted"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "inverted asc"
+                },
+                {
+                  "key": "$expand",
+                  "value": "author"
+                },
+                {
+                  "key": "$top",
+                  "value": "3"
+                }
+              ]
+            },
+            "description": "В ORDER BY уходит SQL-псевдоним, а выражение добавляется в SELECT: выражение в сортировке TypeORM читает как имя алиаса и отказывается строить запрос (дефект A-18)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "$search",
+      "item": [
+        {
+          "name": "Поиск по подстроке",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=computing",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "computing"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Регистронезависимость",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$search=ENGINE",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "ENGINE"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Поиск по числу",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=45",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "45"
+                }
+              ]
+            },
+            "description": "По текстовым колонкам идёт LIKE, по числовым — точное равенство."
+          },
+          "response": []
+        },
+        {
+          "name": "Несколько слов — неявный AND",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=pioneer computing",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "pioneer computing"
+                }
+              ]
+            },
+            "description": "Пробел между словами означает AND: найдётся строка, где есть оба."
+          },
+          "response": []
+        },
+        {
+          "name": "Оператор OR",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=ada OR alan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "ada OR alan"
+                }
+              ]
+            },
+            "description": "Любое из слов."
+          },
+          "response": []
+        },
+        {
+          "name": "Фраза целиком",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=\"pioneer of computing\"",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "\"pioneer of computing\""
+                }
+              ]
+            },
+            "description": "Кавычки ищут фразу вместе с пробелами."
+          },
+          "response": []
+        },
+        {
+          "name": "Отрицание",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$search=NOT ada",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$search",
+                  "value": "NOT ada"
+                }
+              ]
+            },
+            "description": "Строки, где слова нет. Записи с пустыми колонками остаются в выдаче."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Ошибки",
+      "item": [
+        {
+          "name": "Скрытая колонка — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/users?$select=id,passwordHash",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "$select",
+                  "value": "id,passwordHash"
+                }
+              ]
+            },
+            "description": "Колонка помечена select: false и не покидает сервер ни по одному пути — ни в $select, ни в $filter, ни в $orderby (дефект A-12)."
+          },
+          "response": []
+        },
+        {
+          "name": "Функция без трансляции — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=totaloffsetminutes(registeredAt) eq 0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "totaloffsetminutes(registeredAt) eq 0"
+                }
+              ]
+            },
+            "description": "Функция разобрана, но SQL для неё нет: смещение часового пояса не хранится, восстанавливать его не из чего. Запрос отвергается, а не выполняется частично."
+          },
+          "response": []
+        },
+        {
+          "name": "Несуществующее поле — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=nonexistent eq 1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "nonexistent eq 1"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Отрицательный $top — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$top=-5",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "-5"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Некорректный синтаксис — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$filter=!!!",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "!!!"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Непереносимое приведение — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$filter=cast(name,Edm.Int32) eq 1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "cast(name,Edm.Int32) eq 1"
+                }
+              ]
+            },
+            "description": "Разбор строки в число проваливается на любом нечисловом значении. По спецификации неудачное приведение обязано дать null, а в SQL оно даёт ошибку уровня СУБД (PostgreSQL), ноль с предупреждением (MySQL) или 0.0 (SQLite); портируемого TRY_CAST нет. Ответ — 400 с названием пары типов, а не молча неверная выборка."
+          },
+          "response": []
+        },
+        {
+          "name": "Имя $compute занято свойством — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=age mul 2 as name&$filter=name eq 'Ada'",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "age mul 2 as name"
+                },
+                {
+                  "key": "$filter",
+                  "value": "name eq 'Ada'"
+                }
+              ]
+            },
+            "description": "По спецификации совпадение имени со свойством сущности — ошибка, а не переопределение: молча выигранное имя означало бы фильтр не по той колонке."
+          },
+          "response": []
+        },
+        {
+          "name": "Выражение $compute через связь «ко многим» в $select — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$compute=books/pages mul 2 as p&$select=id,p",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$compute",
+                  "value": "books/pages mul 2 as p"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,p"
+                }
+              ]
+            },
+            "description": "Значение считалось бы по каждой книге, и одного значения на автора у него не существует. В $filter тот же путь допустим — там это обычное условие по соединённой связи."
+          },
+          "response": []
+        },
+        {
+          "name": "Псевдоним $compute во вложенном $select — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($compute=pages mul 2 as d;$select=title,d)&$select=id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($compute=pages mul 2 as d;$select=title,d)"
+                },
+                {
+                  "key": "$select",
+                  "value": "id"
+                }
+              ]
+            },
+            "description": "Вычисленные значения материализуются только для корня. Псевдоним во вложенном $select не доехал бы до ответа, поэтому запрос отвергается, а не выполняется частично."
+          },
+          "response": []
+        },
+        {
+          "name": "$count у связи «к одному» — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/books?$expand=author($count=true)",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "books"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "author($count=true)"
+                }
+              ]
+            },
+            "description": "Считать нечего: у связи «к одному» либо одна запись, либо ни одной, и это видно по самому ответу. Молча проигнорировать опцию нельзя — клиент решил бы, что счётчик просто не поддержан, и не узнал бы, что запрос выполнен не так, как написан."
+          },
+          "response": []
+        },
+        {
+          "name": "$count глубже первого уровня $expand — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/authors?$expand=books($expand=reviews($count=true))",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "authors"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "books($expand=reviews($count=true))"
+                }
+              ]
+            },
+            "description": "Счётчики приходят из «сырого» результата и раскладываются по сущностям корня по первичному ключу — тем же способом, что и значения $compute. Для связи связи пришлось бы сопоставлять строки с элементами каждой коллекции по отдельности, и ровно поэтому $compute в $select тоже сделан только для корня."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
