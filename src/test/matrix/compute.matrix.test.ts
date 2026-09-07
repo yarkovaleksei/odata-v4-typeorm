@@ -9,7 +9,7 @@
  *
  * Возраста авторов из `seed.sql`: Ada 36, Grace 45, Alan 41, Barbara 29.
  */
-import { ODataInvalidQueryError, ODataParseError } from '../../lib/errors';
+import { ODataInvalidQueryError, ODataParseError, ODataUnsupportedError } from '../../lib/errors';
 import { executeQuery } from '../../lib/executeQuery';
 import type { QueryParams } from '../../lib/types';
 import { Author, Book, User } from '../fixtures';
@@ -269,6 +269,39 @@ describe('$compute — отказы', () => {
     await expect(
       authorIds({ $compute: 'books/pages mul 2 as p', $filter: 'p gt 800' })
     ).resolves.toEqual([2]);
+  });
+
+  /**
+   * Вычисленные значения материализуются только для корня: они находят свою сущность
+   * по первичному ключу корня, а для связи пришлось бы раскладывать их по элементам
+   * каждой коллекции. Пока это не сделано, псевдоним во вложенном `$select` просто
+   * не доехал бы до ответа — то есть запрос выполнился бы не так, как написан,
+   * и без единого признака. Поэтому он отвергается.
+   */
+  it('псевдоним во вложенном $select внутри $expand', async () => {
+    const error = await expectRejected(authorIds, {
+      $expand: 'books($compute=pages mul 2 as doubled;$select=title,doubled)',
+      $select: 'id',
+    });
+
+    expect(error).toBeInstanceOf(ODataUnsupportedError);
+    expect(error.message).toContain('books($select=doubled)');
+  });
+
+  it('тот же псевдоним во вложенном $filter и $orderby работает', async () => {
+    // Внутри связи область имён своя, и в её собственных $filter / $orderby псевдоним
+    // разворачивается в выражение прямо в SQL — материализовать его для этого не нужно.
+    const [ada] = await rows(
+      dataSource.getRepository(Author),
+      {
+        $filter: 'id eq 1',
+        $expand:
+          'books($compute=pages mul 2 as doubled;$filter=doubled gt 400;$orderby=doubled desc)',
+      },
+      'Author'
+    );
+
+    expect(ada?.books.map((book) => book.id)).toEqual([1]);
   });
 
   it('поля внутри выражения проверяются по белому списку, а не имя псевдонима', async () => {

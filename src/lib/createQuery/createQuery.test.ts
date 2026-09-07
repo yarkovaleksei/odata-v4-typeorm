@@ -6,6 +6,7 @@
  * собираются правильно, плюс edge cases ошибок.
  */
 import { ODataParseError, ODataUnsupportedError } from '../errors';
+import { parseQueryOptions } from '../odataParser';
 import { createQuery } from './createQuery';
 
 describe('createQuery', () => {
@@ -30,6 +31,31 @@ describe('createQuery', () => {
       expect(compiled.where).toBe('u.age > :p0');
       expect(compiled.limit).toBe(10);
       expect(compiled.select).toContain('u.id');
+    });
+  });
+
+  /**
+   * Вторая половина сигнатуры: на вход принимается и готовый `Token`. Нужна тем, кто уже
+   * разобрал строку сам — например разбирает её один раз, а компилирует под несколько
+   * алиасов или диалектов. Повторный разбор в этом случае не выполняется, и результат
+   * обязан совпадать с компиляцией той же строки.
+   */
+  describe('готовый AST вместо строки', () => {
+    it('принимается наравне со строкой и даёт тот же результат', () => {
+      const source = "$filter=name eq 'Ann'&$select=id,name";
+      const fromAst = createQuery(parseQueryOptions(source), { alias: 'u' });
+      const fromString = createQuery(source, { alias: 'u' });
+
+      expect(fromAst.where).toBe(fromString.where);
+      expect(fromAst.select).toBe(fromString.select);
+      expect([...fromAst.parameters]).toEqual([...fromString.parameters]);
+    });
+
+    it('один разобранный запрос компилируется под разные алиасы', () => {
+      const ast = parseQueryOptions('$filter=age gt 18');
+
+      expect(createQuery(ast, { alias: 'a' }).where).toBe('a.age > :p0');
+      expect(createQuery(ast, { alias: 'b' }).where).toBe('b.age > :p0');
     });
   });
 

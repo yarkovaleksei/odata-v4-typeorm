@@ -180,6 +180,42 @@ describe('parseQueryOptions', () => {
     });
   });
 
+  /**
+   * `$search` — единственная известная опция, значение которой этот парсер не разбирает:
+   * у неё своя грамматика, и занимается ей `parseSearch`, а в обычном конвейере опция
+   * отделяется ещё раньше — `executeQueryByQueryBuilder` вынимает её до склейки строки.
+   * Читается она здесь ровно затем, чтобы строка, где `$search` записан вместе
+   * с остальными опциями, не отвергалась целиком.
+   */
+  describe('$search', () => {
+    it('значение читается как есть, до разделителя опций', () => {
+      expect(option('$search=ada lovelace', TokenType.Search).value.raw).toBe('ada lovelace');
+    });
+
+    it('не мешает соседним опциям', () => {
+      const options = parseQueryOptions('$search=ada&$top=5').value.options;
+
+      expect(options.map((o: Token) => o.type)).toEqual([TokenType.Search, TokenType.Top]);
+      expect(option('$search=ada&$top=5', TokenType.Top).value.raw).toBe('5');
+    });
+
+    it('операторы и кавычки грамматики поиска доезжают до значения нетронутыми', () => {
+      expect(option('$search=(ada OR grace) NOT hopper', TokenType.Search).value.raw).toBe(
+        '(ada OR grace) NOT hopper'
+      );
+    });
+
+    /**
+     * Амперсанд внутри кавычек не считается разделителем — ровно как и в `$filter`:
+     * иначе фраза `"black & white"` разорвала бы строку опций пополам.
+     */
+    it('амперсанд внутри строкового литерала не обрывает значение', () => {
+      expect(option("$search='black & white'&$top=1", TokenType.Search).value.raw).toBe(
+        "'black & white'"
+      );
+    });
+  });
+
   describe('ошибки', () => {
     it.each([
       ['неизвестная опция', '$apply=groupby((a))'],
