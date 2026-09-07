@@ -115,7 +115,8 @@ export class UsersController {
   @Get()
   find(@Query() query: QueryParams) {
     return executeQuery(this.repository, query, {
-      // alias обязан совпадать с именем класса сущности или именем её таблицы
+      // alias — префикс колонок в SQL; совпадать с именем сущности не обязан,
+      // метаданные библиотека берёт из самого построителя
       alias: 'UserEntity',
       maxTop: 100,
       allowedFields: ['id', 'name', 'email', 'posts/id', 'posts/title'],

@@ -25,6 +25,7 @@ GET /api/users?$filter=contains(name,'ali')&$select=id,name&$orderby=name asc&$t
   - [Express: свой обработчик](#express-свой-обработчик)
   - [Ограничение выдачи правами пользователя](#ограничение-выдачи-правами-пользователя)
   - [Ограничение доступных полей и размера страницы](#ограничение-доступных-полей-и-размера-страницы)
+  - [Связи без `$expand`](#связи-без-expand)
   - [NestJS](#nestjs)
   - [Без TypeORM: только компиляция в SQL](#без-typeorm-только-компиляция-в-sql)
 - [Примеры OData-запросов](#примеры-odata-запросов)
@@ -48,7 +49,9 @@ yarn add odata-v4-typeorm-improved
 npm install typeorm
 ```
 
-Требуется Node.js 20.19 или новее — диапазон повторяет требование самой TypeORM 1.x.
+Требуется Node.js **20.19+, 22.13+ или 24.11+** (`engines`:
+`^20.19.0 || ^22.13.0 || >=24.11.0`) — диапазон повторяет требование самой TypeORM 1.x,
+поэтому промежуточные версии вроде 22.0 в него не входят.
 Пакет публикуется в двух форматах — CommonJS и модули ES, — поэтому одинаково работает
 и с `require`, и с `import`.
 
@@ -72,7 +75,7 @@ yarn server
 Там же отдаётся схема сервиса: <http://localhost:3001/api/$metadata> — готовый документ
 CSDL XML, который можно скормить клиенту OData как есть.
 
-Там же лежит коллекция Postman на 84 запроса: [examples/postman/](./examples/postman/).
+Там же лежит коллекция Postman на 88 запросов: [examples/postman/](./examples/postman/).
 
 ## Быстрый старт
 
@@ -143,7 +146,7 @@ curl "http://localhost:3001/api/users?\$top=5&\$orderby=name%20asc&\$count=true"
 | `$orderby` | ✅ | `$orderby=name desc,id asc` |
 | `$top` / `$skip` | ✅ | `$top=20&$skip=40` |
 | `$count` | ✅ | `$count=true` — по умолчанию выключен, ответ тогда обычный массив |
-| `$expand` | ✅ | `$expand=posts($select=id,title;$top=2)` — вложенная страница вырезается в SQL оконной функцией |
+| `$expand` | ✅ | `$expand=posts($select=id,title;$top=2;$count=true)` — вложенная страница вырезается в SQL оконной функцией, счётчик приходит как `posts@odata.count` |
 | `$search` | ✅ | `$search=(ada OR grace) NOT "computer science"` — грамматика OData целиком |
 | `$compute` | ✅ | `$compute=price mul qty as total&$orderby=total desc` — имя выражения работает в `$filter`, `$orderby` и `$select` |
 
@@ -531,6 +534,12 @@ try {
 вырезает оконная функция в условии соединения. На MySQL и на незнакомых драйверах срез
 по-прежнему делается после запроса — почему именно так, написано в
 [docs/odata-support.md](./docs/odata-support.md#вложенные-top-и-skip).
+
+**Вложенный `$count` работает только на связях корня.** `$expand=books($count=true)` даёт
+`books@odata.count`, а `$expand=books($expand=reviews($count=true))` отвергается: счётчики
+приходят из «сырого» результата и находят свою сущность по первичному ключу корня —
+то же ограничение и по той же причине, что у `$compute` в `$select`. Подробности —
+в [docs/odata-support.md](./docs/odata-support.md#вложенный-count).
 
 **Белые списки выключены по умолчанию.** Без `allowedFields` / `allowedExpands` клиент
 видит любое поле сущности и любую связь — см. раздел выше.

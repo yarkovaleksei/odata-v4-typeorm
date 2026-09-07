@@ -68,17 +68,28 @@ req.query  { $filter: "name eq 'Ann'", $top: '10', $search: 'x' }
 │   .select(rootSelect)          ← $select либо все колонки    │
 │   .andWhere(where)             ← $filter                     │
 │   .setParameters(params)                                     │
-│   processIncludes(...)         ← $expand → LEFT JOIN         │
-│   .addOrderBy(...)             ← $orderby                    │
+│   applyOrderBy(...)            ← $orderby КОРНЯ              │
+│   processIncludes(...)         ← $expand → LEFT JOIN,        │
+│                                  следом сортировки связей    │
 │   processSearch(...)           ← $search → LIKE ... OR ...   │
 │   .skip(...) .take(...)        ← $skip / $top                │
-│   getMany() | getManyAndCount()                              │
+│   getMany() | getManyAndCount() | getRawAndEntities()        │
 └──────────┬───────────────────────────────────────────────────┘
            ▼
 ┌──────────────────────┐
 │ applyNestedPagination│  запасной срез вложенных $top / $skip по дереву сущностей
 └──────────────────────┘
 ```
+
+**Порядок сортировок важен.** Корневой `$orderby` добавляется ДО `processIncludes`, а не
+после: `addOrderBy` дописывает выражения в конец `ORDER BY`, и сортировка связи, оказавшись
+первой, начала бы управлять порядком корневых строк — родители без связанных записей
+всплывали бы наверх. Это дефект A-14, и порядок шагов здесь — его исправление.
+
+**`getRawAndEntities()`** вместо обычной выборки нужен, когда в ответе есть значения,
+которых нет в сущности: псевдонимы `$compute` из `$select` и счётчики `$count` внутри
+`$expand`. Сборщик сущностей TypeORM такие колонки отбрасывает, поэтому они забираются
+из «сырого» результата и раскладываются по сущностям корня по первичному ключу.
 
 ### Почему объект → строка → AST
 
@@ -228,6 +239,7 @@ peer-зависимостью: он и так есть в проекте, кот
 |---|---|
 | [src/lib/index.ts](../src/lib/index.ts) | Публичный API пакета |
 | [src/lib/types.ts](../src/lib/types.ts) | `SqlOptions`, `QueryParams`, `ParsedQueryParams` |
+| [src/lib/errors/](../src/lib/errors/) | Классы ошибок и признак `isClientError` |
 | [src/lib/odataParser/](../src/lib/odataParser/) | Строка OData → дерево разбора |
 | [src/lib/literal/](../src/lib/literal/) | Литерал OData → значение JavaScript и текст SQL |
 | [src/lib/dialect/](../src/lib/dialect/) | Драйвер TypeORM → диалект и его возможности |
@@ -241,6 +253,8 @@ peer-зависимостью: он и так есть в проекте, кот
 | [src/lib/executeQuery/processIncludes/](../src/lib/executeQuery/processIncludes/) | `includes` → LEFT JOIN |
 | [src/lib/executeQuery/nestedPageCondition/](../src/lib/executeQuery/nestedPageCondition/) | Вложенный `$top` / `$skip` → оконная функция |
 | [src/lib/executeQuery/applyNestedPagination/](../src/lib/executeQuery/applyNestedPagination/) | Тот же срез запасным путём, по дереву сущностей |
+| [src/lib/executeQuery/nestedCount/](../src/lib/executeQuery/nestedCount/) | Вложенный `$count` → скалярный подзапрос на связь |
+| [src/lib/executeQuery/autoExpand/](../src/lib/executeQuery/autoExpand/) | Связи корня дописываются в `$expand` до разбора |
 | [src/lib/executeQuery/applyOrderBy/](../src/lib/executeQuery/applyOrderBy/) | Скомпилированный `$orderby` → `addOrderBy`; общий для корня и связей |
 | [src/lib/executeQuery/relationSource/](../src/lib/executeQuery/relationSource/) | Путь связей → `FROM` и условие подзапроса; общий для лямбд и `$search` |
 | [src/lib/executeQuery/sqlIdentifier/](../src/lib/executeQuery/sqlIdentifier/) | Экранирование имён таблиц и колонок по правилам драйвера |

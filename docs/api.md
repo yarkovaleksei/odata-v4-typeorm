@@ -4,6 +4,7 @@
 
 ```ts
 import {
+  // Стабильная часть контракта
   executeQuery,
   executeQueryByQueryBuilder,
   ODataQueryMiddleware,
@@ -12,9 +13,16 @@ import {
   createQuery,
   createFilter,
   TypeOrmVisitor,
+  ODataUnsupportedError,
+  // Ошибки и признак клиентской ошибки — тоже часть контракта
+  ODataError,
+  ODataParseError,
+  ODataInvalidQueryError,
+  isODataClientError,
+  // Разбор OData отдельно от трансляции
   parseQueryOptions,
   parseFilter,
-  ODataUnsupportedError,
+  // Внутренняя кухня: видна из-за реэкспорта барреля
   parseQueryParams,
   queryToOdataString,
   mapToObject,
@@ -23,8 +31,11 @@ import {
 } from 'odata-v4-typeorm-improved';
 ```
 
-Стабильная часть контракта — первые девять. Остальное экспортируется как побочный эффект
-реэкспорта барреля; рассчитывать на неизменность между минорными версиями не стоит.
+Стабильная часть контракта — девять имён в первой группе; их наличие в обоих форматах
+сборки проверяет `yarn build:check` ([scripts/check-package.ts](../scripts/check-package.ts)).
+Классы ошибок и `isODataClientError` из второй группы так же стабильны — без них не написать
+обработчик HTTP. Последняя группа экспортируется как побочный эффект реэкспорта барреля;
+рассчитывать на её неизменность между минорными версиями не стоит.
 
 ---
 
@@ -51,10 +62,15 @@ function executeQuery<T extends ObjectLiteral = ObjectLiteral>(
 | `options.searchFields` | Поля для `$search`; пути от корня, можно через связи (`'author/name'`) |
 | `options.searchMode` | `'like'` (по умолчанию) или `'fulltext'` — полнотекстовый поиск СУБД |
 | `options.searchLanguage` | Язык словоформ PostgreSQL для `'fulltext'`. По умолчанию `'simple'` |
+| `options.autoExpand` | Возвращать связи корня без `$expand`. По умолчанию `false` |
 | `options.nestedPaginationInSql` | Выполнять ли вложенные `$top` / `$skip` в SQL. По умолчанию `true` |
 
 **Возвращает** массив сущностей; `{ items, count }` — только при явном `$count=true`
 (отсутствующий `$count` по OData v4, раздел 11.2.5.5, означает `false`).
+
+`$count` **внутри** `$expand` формы ответа не меняет: он добавляет к каждой сущности
+свойство `<связь>@odata.count` рядом с самой связью. Подробности и ограничения —
+в [odata-support.md](./odata-support.md#вложенный-count).
 
 ```ts
 // Репозиторий
@@ -90,8 +106,8 @@ const total = Array.isArray(result) ? result.length : result.count;
 | Ошибка | Причина | HTTP |
 |---|---|---|
 | `ODataParseError` | Синтаксически некорректный OData-параметр; конструкция, которой нет в грамматике (геофункции, JSON-литералы, `$apply`, `$levels`, `$skiptoken`) | `400` |
-| `ODataUnsupportedError` | Конструкция, которую грамматика принимает, но транслировать в SQL нельзя (`isof`, `totaloffsetminutes`, приведение `cast`, которое может провалиться, любая неизвестная функция) | `400` |
-| `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка; имя `$compute`, занятое свойством сущности или объявленное дважды | `400` |
+| `ODataUnsupportedError` | Конструкция, которую грамматика принимает, но транслировать в SQL нельзя (`isof`, `totaloffsetminutes`, приведение `cast`, которое может провалиться, любая неизвестная функция, `$count` глубже первого уровня `$expand`) | `400` |
+| `ODataInvalidQueryError` | Отрицательный `$top`/`$skip`; поле или связь вне белого списка; имя `$compute`, занятое свойством сущности или объявленное дважды; `$count` у связи «к одному» | `400` |
 | `QueryFailedError` | В `$filter` / `$orderby` указана несуществующая колонка — имена по метаданным не проверяются | `400` |
 | `EntityMetadataNotFoundError` | У построителя нет метаданных и `alias` не соответствует сущности | `500` |
 

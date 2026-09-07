@@ -284,6 +284,53 @@ const result = await executeQuery(repo, query, {
 
 ---
 
+## Сколько всего связанных строк: `$count` внутри `$expand`
+
+Страница связи без её полного размера бесполезна — по трём постам не понять, есть ли
+четвёртый. `$count=true` внутри `$expand` добавляет это число:
+
+```bash
+GET /api/users?$expand=posts($orderby=createdAt desc;$top=3;$count=true)
+```
+
+```json
+[
+  {
+    "id": 1,
+    "name": "Alice",
+    "posts": [{ "id": 9 }, { "id": 7 }, { "id": 4 }],
+    "posts@odata.count": 12
+  }
+]
+```
+
+Число приходит **аннотацией рядом со связью**, а не вместо неё: `posts` остаётся массивом,
+и код, который его перебирает, ничего не замечает. Имя `<связь>@odata.count` — из OData JSON
+(раздел 12), его же ждут клиенты OData.
+
+Счётчик учитывает вложенный `$filter`, но **не** вложенные `$top` и `$skip` — иначе он всегда
+равнялся бы размеру страницы. Второго обращения к базе он не стоит: значение считает скалярный
+подзапрос в том же запросе.
+
+```ts
+const items = Array.isArray(result) ? result : result.items;
+
+// Свойство с `@` читается через скобки — точечная запись здесь неприменима
+const total = items[0]?.['posts@odata.count'];
+```
+
+| Случай | Поведение |
+|---|---|
+| `$count=false` либо опция не указана | Аннотации в ответе нет |
+| `$count` у связи «к одному» | `ODataInvalidQueryError` — считать нечего |
+| `$count` глубже первого уровня `$expand` | `ODataUnsupportedError` |
+
+> Глубина ограничена по той же причине, что у `$compute` в `$select`: значения приходят
+> из «сырого» результата и находят свою сущность по первичному ключу корня. Для связи связи
+> пришлось бы раскладывать их по элементам каждой коллекции отдельно.
+
+---
+
 ## Связи корня без `$expand`
 
 `autoExpand: true` возвращает связи корневой сущности так, будто клиент перечислил их сам.
@@ -291,7 +338,8 @@ const result = await executeQuery(repo, query, {
 вместе с сущностью:
 
 ```ts
-// Книга придёт с author, publisher, reviews и tags, а отзывы — ещё и со своими авторами
+// Книга придёт со всеми своими связями — author, publisher, category, reviews, tags
+// и details, — а отзывы, названные клиентом, ещё и со своими авторами
 const result = await executeQuery(repo, { $expand: 'reviews($expand=user)' }, {
   alias: 'Book',
   autoExpand: true,
@@ -477,6 +525,7 @@ GET /api/users?$expand=posts
 GET /api/users?$expand=posts($select=id,title)
 GET /api/users?$expand=posts($orderby=id desc)
 GET /api/users?$expand=posts($orderby=id desc;$top=3)   # по три последних поста на пользователя
+GET /api/users?$expand=posts($top=3;$count=true)        # они же плюс posts@odata.count
 GET /api/users?$expand=posts($expand=comments)
 
 # Фильтр по полю связи (БЕЗ одновременного $expand той же связи)

@@ -33,7 +33,8 @@ await dataSource.initialize();
 
 const app = express();
 
-// alias обязан совпадать с именем класса сущности или именем её таблицы
+// alias — префикс колонок в SQL. Для Repository его нужно задать (им создаётся построитель),
+// но совпадать с именем сущности он не обязан: метаданные берутся из самого построителя.
 app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), { alias: 'User' }));
 
 app.listen(3001);
