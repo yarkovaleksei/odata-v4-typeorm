@@ -32,12 +32,26 @@ export interface SchemaResource {
   name: string;
   /** Имя класса сущности: `Book`. */
   alias: string;
+  /** Потолок `$top`, заданный сервером для этого ресурса. */
+  maxTop: number;
   fields: SchemaField[];
   relations: SchemaRelation[];
 }
 
 /** Строка ответа сервера. Точнее её описать нельзя — состав зависит от запроса. */
 export type Row = Record<string, unknown>;
+
+/**
+ * Образцы строк вместе с полным числом строк ресурса.
+ *
+ * `total` берётся из `$count` и потому не ограничен ни `SAMPLE_SIZE`, ни потолком `maxTop`.
+ * Без него нельзя отличить «строк ровно столько» от «ответ обрезан», а на этом различии
+ * и держится пример с усечением.
+ */
+export interface Sample {
+  rows: Row[];
+  total: number;
+}
 
 /** Параметры OData в том виде, в каком они кладутся в форму и в URL. */
 export interface QueryDraft {

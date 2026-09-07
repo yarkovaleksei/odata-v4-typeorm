@@ -28,11 +28,15 @@ import type { Example, QueryDraft, Row, SchemaResource } from './types.js';
  * @param schema - вся схема: нужна, чтобы узнать поля сущностей на другом конце связей.
  * @param rows - образцы строк; пустой массив допустим — тогда останутся примеры,
  *   которым значения не нужны.
+ * @param total - сколько всего строк у сущности. Отличается от `rows.length`, когда ответ
+ *   обрезан потолком `maxTop` либо размером выборки; на этом различии держится пример
+ *   с усечением.
  */
 export function generateExamples(
   resource: SchemaResource,
   schema: SchemaResource[],
-  rows: Row[]
+  rows: Row[],
+  total = rows.length
 ): Example[] {
   const examples: Example[] = [];
   const add = (title: string, query: QueryDraft, expectError?: boolean): void => {
@@ -60,6 +64,17 @@ export function generateExamples(
     $count: 'true',
   });
   add('Пустая страница, только счётчик', { $top: '0', $count: 'true' });
+
+  // Усечение до maxTop добавляется, только когда его видно: при потолке больше числа строк
+  // ответ на завышенный `$top` ничем не отличается от ответа без потолка, и пример
+  // показывал бы ровно ничего. Со `$count=true` разница видна в одном ответе:
+  // items обрезан до потолка, count по-прежнему полный — режется страница, а не выборка.
+  if (total > resource.maxTop) {
+    add(`Усечение до maxTop (${resource.maxTop})`, {
+      $top: String(resource.maxTop * 10),
+      $count: 'true',
+    });
+  }
 
   // ── Фильтры по типам полей ────────────────────────────────────────────────
   const [stringField] = byKind('string');

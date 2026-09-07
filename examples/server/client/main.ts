@@ -20,13 +20,13 @@ import { buildQuery, refreshUrl, run, setStatus } from './query.js';
 import { renderExamples } from './render.js';
 import { findResource, loadSchema } from './schema.js';
 import { loadSampleRows } from './samples.js';
-import type { Example, Row, SchemaResource } from './types.js';
+import type { Example, Sample, SchemaResource } from './types.js';
 
 /** Описание всех опубликованных ресурсов; загружается один раз при старте. */
 let schema: SchemaResource[] = [];
 
-/** Образцы строк выбранной сущности — из них берутся значения для примеров. */
-let sampleRows: Row[] = [];
+/** Образцы строк выбранной сущности и их полное число — из них строятся примеры. */
+let sample: Sample = { rows: [], total: 0 };
 
 function currentResource(): SchemaResource | undefined {
   return findResource(schema, form.resource.value);
@@ -78,14 +78,14 @@ async function refreshResource(): Promise<void> {
   renderFieldHints(resource, schema);
   ui.examplesResource.textContent = `/api/${resource.name}`;
 
-  sampleRows = await loadSampleRows(resource);
+  sample = await loadSampleRows(resource);
 
   // Пока грузились строки, пользователь мог выбрать другую сущность.
   if (currentResource() !== resource) {
     return;
   }
 
-  renderExamples(generateExamples(resource, schema, sampleRows), applyExample);
+  renderExamples(generateExamples(resource, schema, sample.rows, sample.total), applyExample);
 }
 
 function bindEvents(): void {

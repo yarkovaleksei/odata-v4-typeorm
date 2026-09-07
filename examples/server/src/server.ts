@@ -67,7 +67,9 @@ const RESOURCES = {
   authors: { entity: Author, alias: 'Author' },
   // Потолок занижен намеренно: рецензий пять, и только так видно, что `$top` сверх лимита
   // усекается, а не отвергается. С `$count=true` это видно в одном ответе: items короче count.
-  reviews: { entity: Review, alias: 'Review', maxTop: 2 },
+  // Три, а не два: потолок режет и выборку образцов для конструктора, а ему нужны разные
+  // значения, чтобы собрать примеры с `in` и `$search ... OR`.
+  reviews: { entity: Review, alias: 'Review', maxTop: 3 },
   publishers: { entity: Publisher, alias: 'Publisher' },
   categories: { entity: Category, alias: 'Category' },
   tags: { entity: Tag, alias: 'Tag' },
@@ -109,12 +111,16 @@ const ROUTE_BY_ENTITY = new Map<unknown, string>(
  * которая уже есть в библиотеке.
  */
 function describeResource(name: ResourceName) {
-  const { entity, alias } = RESOURCES[name];
-  const metadata = dataSource.getMetadata(entity);
+  const resource: { entity: EntityTarget<ObjectLiteral>; alias: string; maxTop?: number } =
+    RESOURCES[name];
+  const metadata = dataSource.getMetadata(resource.entity);
 
   return {
     name,
-    alias,
+    alias: resource.alias,
+    // Потолок страницы нужен конструктору, чтобы показать пример с усечением ровно там,
+    // где усечение видно: при `maxTop` больше числа строк оно ничем не проявляется.
+    maxTop: resource.maxTop ?? DEFAULT_MAX_TOP,
     fields: metadata.columns
       // Колонки внешних ключей скрыты: они дублируют связь и в $select бесполезны.
       // Колонки `select: false` — тоже: библиотека отвергает обращение к ним, и подсказка
