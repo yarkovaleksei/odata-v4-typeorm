@@ -368,7 +368,7 @@ export class AppModule implements NestModule {
 ```
 
 Провайдеры `DataSource` и репозитория, а также вариант через контроллер (с корректными
-кодами ошибок) — в [docs/recipes.md](./docs/recipes.md#nestjs-middleware).
+кодами ошибок) — в [docs/recipes-nestjs.md](./docs/recipes-nestjs.md).
 
 ### Без TypeORM: только компиляция в SQL
 
@@ -546,12 +546,14 @@ try {
 | Документ | О чём |
 |---|---|
 | [docs/api.md](./docs/api.md) | Справочник по всем экспортам |
-| [docs/recipes.md](./docs/recipes.md) | Готовые примеры под конкретные задачи |
+| [docs/recipes.md](./docs/recipes.md) | Готовые примеры: опции запроса, форма ответа, поиск, компиляция без TypeORM |
+| [docs/recipes-express.md](./docs/recipes-express.md) | То же для Express: маршруты, готовые middleware, `$metadata` |
+| [docs/recipes-nestjs.md](./docs/recipes-nestjs.md) | То же для NestJS: контроллеры, интерцепторы, фильтры, Fastify |
 | [docs/odata-support.md](./docs/odata-support.md) | Матрица поддержки OData |
 | [docs/architecture.md](./docs/architecture.md) | Устройство конвейера |
 | [CHANGELOG.md](./CHANGELOG.md) | Что менялось между версиями, включая ломающие изменения |
 
-Эти четыре документа плюс `CHANGELOG.md` входят в npm-пакет. Материалы для тех, кто
+Все они плюс `CHANGELOG.md` входят в npm-пакет. Материалы для тех, кто
 дорабатывает саму библиотеку, живут только в репозитории: [development.md](./docs/development.md)
 (команды, тесты, релиз), [audit.md](./docs/audit.md) (журнал аудита с воспроизведением
 каждого дефекта), [roadmap.md](./docs/roadmap.md) (журнал работ) и

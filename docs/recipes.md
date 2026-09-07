@@ -1,84 +1,24 @@
 # Рецепты
 
-Рабочие примеры под конкретные задачи. Справочник сигнатур — в [api.md](./api.md),
-границы возможностей — в [odata-support.md](./odata-support.md).
+Рабочие примеры под конкретные задачи. Здесь — то, что не зависит от веб-фреймворка:
+опции запроса, форма ответа, поиск, фильтры, компиляция без TypeORM.
 
----
+Привязка к фреймворку вынесена отдельно:
 
-## Express: минимальный эндпоинт
+| Документ | О чём |
+|---|---|
+| [recipes-express.md](./recipes-express.md) | Express: маршруты, готовые middleware, обработка ошибок, `$metadata` |
+| [recipes-nestjs.md](./recipes-nestjs.md) | NestJS: контроллеры, провайдеры, фильтр исключений, интерцептор конверта |
 
-```ts
-import express from 'express';
-import { DataSource } from 'typeorm';
-import { ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
-
-import { User } from './entities/User';
-
-const dataSource = new DataSource({
-  type: 'postgres',
-  host: 'localhost',
-  port: 5432,
-  username: 'postgres',
-  password: 'postgres',
-  database: 'app',
-  entities: [User],
-});
-
-await dataSource.initialize();
-
-const app = express();
-
-// alias обязан совпадать с именем класса сущности или именем её таблицы
-app.get('/api/users', ODataQueryMiddleware(dataSource.getRepository(User), { alias: 'User' }));
-
-app.listen(3001);
-```
-
-Проверка:
-
-```bash
-curl "http://localhost:3001/api/users?\$top=10&\$orderby=name%20asc"
-```
-
----
-
-## Express: свой обработчик (рекомендуется для публичного API)
-
-`ODataQueryMiddleware` уже классифицирует ошибки сам. Свой обработчик нужен, когда важен
-формат тела ответа или ограничения зависят от текущего запроса.
-
-```ts
-import { executeQuery, isODataClientError } from 'odata-v4-typeorm-improved';
-
-app.get('/api/users', async (req, res) => {
-  try {
-    const result = await executeQuery(dataSource.getRepository(User), req.query, {
-      alias: 'User',
-      maxTop: 100,
-    });
-
-    return res.json(result);
-  } catch (e) {
-    logger.error('OData query failed', { query: req.query, error: e });
-
-    // Признак isClientError несут все ошибки библиотеки — разбирать текст не нужно
-    if (isODataClientError(e)) {
-      return res.status(400).json({ message: e.message });
-    }
-
-    return res.status(500).json({ message: 'Internal server error.' });
-  }
-});
-```
-
-Обратите внимание: наружу не уходит текст неизвестной ошибки — он остаётся в логе.
+Справочник сигнатур — в [api.md](./api.md), границы возможностей —
+в [odata-support.md](./odata-support.md).
 
 ---
 
 ## Ограничение доступных полей, связей и размера страницы
 
 ```ts
-const result = await executeQuery(dataSource.getRepository(User), req.query, {
+const result = await executeQuery(dataSource.getRepository(User), query, {
   alias: 'User',
   // $top больше — усекается до 100; отрицательный отвергается как 400
   maxTop: 100,
@@ -105,32 +45,36 @@ GET /api/users?$expand=sessions                # → 400
 через `andWhere`, поэтому ваше условие обойти нельзя.
 
 ```ts
-app.get('/api/documents', async (req, res) => {
+import { executeQuery, type QueryParams } from 'odata-v4-typeorm-improved';
+
+function findDocuments(query: QueryParams, ownerId: number) {
   const qb = dataSource
     .getRepository(Document)
     .createQueryBuilder('Document')
-    .where('Document.ownerId = :ownerId', { ownerId: req.user.id });
+    .where('Document.ownerId = :ownerId', { ownerId });
 
-  const result = await executeQuery(qb, req.query);
-
-  res.json(result);
-});
+  return executeQuery(qb, query);
+}
 ```
 
 Для мультиарендности — то же самое с `tenantId`.
 
-> `ODataQueryMiddleware` для этого не подходит: репозиторий захватывается замыканием
-> один раз при регистрации маршрута и не видит текущий запрос.
+> Готовые middleware (`ODataQueryMiddleware`) для этого не подходят: репозиторий
+> захватывается замыканием один раз при регистрации маршрута и не видит текущий запрос.
+
+Как подключить такую функцию к маршруту:
+[Express](./recipes-express.md#права-пользователя-и-мультиарендность),
+[NestJS](./recipes-nestjs.md#права-пользователя-и-мультиарендность).
 
 ---
 
-## Форма ответа: массив или `{ items, count }`
+## Форма ответа: массив или объект со счётчиком
 
 `$count` по умолчанию выключен, поэтому базовая форма ответа — массив. Объект со
 счётчиком возвращается только на явный `$count=true`.
 
 ```ts
-const result = await executeQuery(repo, req.query, { alias: 'User' });
+const result = await executeQuery(repo, query, { alias: 'User' });
 
 // Универсальное сужение типа
 const items = Array.isArray(result) ? result : result.items;
@@ -140,14 +84,14 @@ const total = Array.isArray(result) ? result.length : result.count;
 Всегда возвращать массив — запретить клиенту менять форму ответа:
 
 ```ts
-const result = await executeQuery(repo, { ...req.query, $count: 'false' }, { alias: 'User' });
+const result = await executeQuery(repo, { ...query, $count: 'false' }, { alias: 'User' });
 // result: User[]
 ```
 
 Всегда возвращать счётчик — независимо от того, что прислал клиент:
 
 ```ts
-const result = await executeQuery(repo, { ...req.query, $count: 'true' }, { alias: 'User' });
+const result = await executeQuery(repo, { ...query, $count: 'true' }, { alias: 'User' });
 // result: { items: User[]; count: number }
 ```
 
@@ -165,191 +109,33 @@ const result = await executeQuery(repo, { $top: '0', $count: 'true' }, { alias: 
 
 ## Ответ в формате OData
 
-Библиотека отдаёт «сырой» результат. Обёртка в конверт OData — на стороне приложения:
+Библиотека отдаёт «сырой» результат. Обёртка в конверт OData — на стороне приложения.
+Она не зависит от фреймворка: нужна только форма результата и адрес сервиса.
 
 ```ts
-app.get('/api/users', async (req, res) => {
-  const result = await executeQuery(dataSource.getRepository(User), req.query, { alias: 'User' });
+import type { GetManyResponse } from 'odata-v4-typeorm-improved';
+import type { ObjectLiteral } from 'typeorm';
 
+export function toODataEnvelope<T extends ObjectLiteral>(
+  result: T[] | GetManyResponse<T>,
+  context: string
+) {
   const items = Array.isArray(result) ? result : result.items;
   const count = Array.isArray(result) ? undefined : result.count;
 
-  res.json({
-    '@odata.context': `${req.protocol}://${req.get('host')}/api/$metadata#Users`,
+  return {
+    '@odata.context': context,
+    // @odata.count добавляется только на $count=true — иначе клиент решит, что счётчик равен нулю
     ...(count !== undefined && { '@odata.count': count }),
     value: items,
-  });
-});
-```
-
----
-
-## Клиент, который строит интерфейс по схеме (react-admin)
-
-`ra-data-odata-server` и подобные провайдеры не знают о ваших сущностях заранее: при старте
-они запрашивают `$metadata`, разбирают его **как XML** и строят по нему список ресурсов.
-Чтобы такой клиент заработал, сервер должен дать три вещи.
-
-**1. Схему на `$metadata` в CSDL XML.**
-
-```ts
-import { ODataMetadataMiddleware, ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
-
-// Имена наборов обязаны совпадать с сегментами маршрутов: клиент берёт EntitySet Name
-// и подставляет его в URL. Набор `User` при маршруте `/api/users` увёл бы его в никуда.
-const RESOURCES = { users: User, posts: Post };
-
-const routeByEntity = new Map<unknown, string>(
-  Object.entries(RESOURCES).map(([route, entity]) => [entity, route])
-);
-
-app.get('/api/$metadata', ODataMetadataMiddleware(dataSource, {
-  entities: Object.values(RESOURCES),
-  entitySetName: (metadata) => routeByEntity.get(metadata.target) ?? metadata.name,
-}));
-```
-
-**2. Списки в конверте OData.** Провайдер читает `value` и `@odata.count`, а не голый
-массив, — см. [Ответ в формате OData](#ответ-в-формате-odata) выше.
-
-**3. Маршрут на каждый набор** — обычный `ODataQueryMiddleware`, обёрнутый в тот же конверт.
-
-```ts
-for (const [route, entity] of Object.entries(RESOURCES)) {
-  app.get(`/api/${route}`, ODataQueryMiddleware(dataSource.getRepository(entity), {
-    alias: dataSource.getMetadata(entity).name,
-    maxTop: 100,
-  }));
+  };
 }
 ```
 
-> **Что придётся дописать самостоятельно.** Библиотека компилирует query options — и только
-> их. Адресация по ключу (`/api/users(1)`), служебный документ в корне сервиса, а также
-> создание, изменение и удаление записей в неё не входят: это маршрутизация и запись,
-> а не трансляция запроса. Провайдеру react-admin они нужны для `getOne`, `create`,
-> `update` и `delete`, поэтому их обработчики пишутся руками поверх обычного репозитория
-> TypeORM.
-
----
-
-## NestJS: middleware
-
-```ts
-// odata-users.middleware.ts
-import { Inject, Injectable, NestMiddleware } from '@nestjs/common';
-import type { NextFunction, Request, Response } from 'express';
-import { ODataQueryMiddleware } from 'odata-v4-typeorm-improved';
-import { Repository } from 'typeorm';
-
-import { UserEntity } from '../entities/user.entity';
-
-@Injectable()
-export class OdataUsersMiddleware implements NestMiddleware {
-  constructor(
-    @Inject('USERS_REPOSITORY') private readonly usersRepository: Repository<UserEntity>
-  ) {}
-
-  use(req: Request, res: Response, next: NextFunction) {
-    return ODataQueryMiddleware(this.usersRepository, { alias: 'UserEntity' })(req, res, next);
-  }
-}
-```
-
-```ts
-// database.providers.ts
-import { DataSource } from 'typeorm';
-
-import { UserEntity } from '../entities/user.entity';
-
-export const databaseProviders = [
-  {
-    provide: 'DATA_SOURCE',
-    useFactory: async () => {
-      const dataSource = new DataSource({
-        type: 'postgres',
-        host: 'localhost',
-        port: 5432,
-        username: 'postgres',
-        password: 'postgres',
-        database: 'app',
-        entities: [UserEntity],
-      });
-
-      return dataSource.initialize();
-    },
-  },
-];
-```
-
-```ts
-// user.providers.ts
-import { DataSource } from 'typeorm';
-
-import { UserEntity } from '../entities/user.entity';
-
-export const userProviders = [
-  {
-    provide: 'USERS_REPOSITORY',
-    useFactory: (dataSource: DataSource) => dataSource.getRepository(UserEntity),
-    inject: ['DATA_SOURCE'],
-  },
-];
-```
-
-```ts
-// app.module.ts
-import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
-
-import { databaseProviders } from './db/database.providers';
-import { OdataUsersMiddleware } from './middlewares/odata-users.middleware';
-import { userProviders } from './providers/user.providers';
-
-@Module({
-  providers: [...databaseProviders, ...userProviders],
-})
-export class AppModule implements NestModule {
-  configure(consumer: MiddlewareConsumer) {
-    consumer.apply(OdataUsersMiddleware).forRoutes('api/v1/odata/users');
-  }
-}
-```
-
----
-
-## NestJS: контроллер вместо middleware
-
-Даёт контроль над кодами ошибок и ограничениями доступа.
-
-```ts
-import { BadRequestException, Controller, Get, Query, Req } from '@nestjs/common';
-import { executeQuery, type QueryParams } from 'odata-v4-typeorm-improved';
-import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
-
-@Controller('api/users')
-export class UsersController {
-  constructor(
-    @InjectRepository(UserEntity) private readonly repository: Repository<UserEntity>
-  ) {}
-
-  @Get()
-  async find(@Query() query: QueryParams, @Req() req: RequestWithUser) {
-    const qb = this.repository
-      .createQueryBuilder('UserEntity')
-      .where('UserEntity.tenantId = :tenantId', { tenantId: req.user.tenantId });
-
-    try {
-      return await executeQuery(qb, query);
-    } catch (e) {
-      if (e instanceof QueryFailedError || /^Fail at \d+/.test((e as Error).message)) {
-        throw new BadRequestException('Invalid OData query.');
-      }
-
-      throw e;
-    }
-  }
-}
-```
+`context` — абсолютный адрес схемы с якорем набора: `https://host/api/$metadata#Users`.
+Его собирают из текущего запроса; примеры —
+[Express](./recipes-express.md#конверт-odata-в-ответе),
+[NestJS](./recipes-nestjs.md#конверт-odata-через-интерцептор).
 
 ---
 
@@ -360,7 +146,7 @@ export class UsersController {
 перечислите поля явно:
 
 ```ts
-const result = await executeQuery(dataSource.getRepository(Book), req.query, {
+const result = await executeQuery(dataSource.getRepository(Book), query, {
   alias: 'Book',
   // пути от корня; можно идти через связи
   searchFields: ['title', 'author/name'],
@@ -387,7 +173,7 @@ GET /api/books?$search=(ada OR grace) AND algorithm
 слова целиком, зато опирается на индекс.
 
 ```ts
-const result = await executeQuery(dataSource.getRepository(Book), req.query, {
+const result = await executeQuery(dataSource.getRepository(Book), query, {
   alias: 'Book',
   searchFields: ['title', 'description'],
   searchMode: 'fulltext',
@@ -449,7 +235,7 @@ EXISTS (SELECT 1 FROM "book" "Author_books_b"
 
 ```ts
 // $filter=books/any(...) пройдёт, $filter=sessions/any(...) — нет
-await executeQuery(repo, req.query, { alias: 'Author', allowedExpands: ['books'] });
+await executeQuery(repo, query, { alias: 'Author', allowedExpands: ['books'] });
 ```
 
 > Лямбдам нужны метаданные сущности, чтобы назвать таблицу подзапроса. `executeQuery`
@@ -486,7 +272,7 @@ GET /api/users?$expand=posts($orderby=id;$top=3;$skip=1)
 
 ```ts
 // вернуться к прежнему поведению: срез в памяти, запрос проще
-const result = await executeQuery(repo, req.query, {
+const result = await executeQuery(repo, query, {
   alias: 'User',
   nestedPaginationInSql: false,
 });
@@ -495,6 +281,30 @@ const result = await executeQuery(repo, req.query, {
 > Выключать имеет смысл на СУБД без оконных функций, которую библиотека не распознала
 > (MySQL 5.7, MariaDB 10.1 — обе сняты с поддержки), либо при неудачном плане запроса
 > на конкретных данных.
+
+---
+
+## Связи корня без `$expand`
+
+`autoExpand: true` возвращает связи корневой сущности так, будто клиент перечислил их сам.
+Удобно во внутреннем API, где ответ должен быть «полным объектом», а список связей меняется
+вместе с сущностью:
+
+```ts
+// Книга придёт с author, publisher, reviews и tags, а отзывы — ещё и со своими авторами
+const result = await executeQuery(repo, { $expand: 'reviews($expand=user)' }, {
+  alias: 'Book',
+  autoExpand: true,
+});
+```
+
+Глубина — один уровень, как у `$expand=*`: дописываются связи корня, но не связи связей.
+Что прислал клиент, то и остаётся: связь, названная в `$expand`, сохраняет свои вложенные
+опции. `allowedExpands` соблюдается — добавляются только связи из списка.
+
+> На публичном API включать не стоит: каждая связь — соединение, а связь «ко многим» ещё
+> и умножает число строк в плоском результате. Там для того же есть `$expand`, который
+> клиент указывает явно и по одной связи.
 
 ---
 
@@ -733,14 +543,14 @@ GET /api/authors?$filter=books/any(b: b/reviews/any(r: r/score gt 4))
 **Не оставляйте `$top` неограниченным на публичном API.** По умолчанию потолка нет:
 
 ```ts
-const result = await executeQuery(repo, req.query, { alias: 'User', maxTop: 100 });
+const result = await executeQuery(repo, query, { alias: 'User', maxTop: 100 });
 ```
 
 **Не открывайте сущность целиком, если в ней есть чувствительные поля.** Белые списки
 по умолчанию выключены — клиент вправе достать любое поле и пройти по любой связи:
 
 ```ts
-const result = await executeQuery(repo, req.query, {
+const result = await executeQuery(repo, query, {
   alias: 'User',
   allowedFields: ['id', 'name', 'email', 'posts/title'],
   allowedExpands: ['posts'],

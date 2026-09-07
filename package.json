@@ -28,6 +28,8 @@
     "docs/README.md",
     "docs/api.md",
     "docs/recipes.md",
+    "docs/recipes-express.md",
+    "docs/recipes-nestjs.md",
     "docs/odata-support.md",
     "docs/architecture.md"
   ],

@@ -9,7 +9,9 @@
 | Документ | Кому и когда |
 |---|---|
 | [api.md](./api.md) | Справочник по всем экспортам: сигнатуры, параметры, ошибки |
-| [recipes.md](./recipes.md) | Готовые примеры: Express, NestJS, права доступа, формат ответа |
+| [recipes.md](./recipes.md) | Готовые примеры вне фреймворка: опции запроса, форма ответа, `$search`, права доступа |
+| [recipes-express.md](./recipes-express.md) | Express: маршруты, готовые middleware, обработка ошибок, `$metadata` |
+| [recipes-nestjs.md](./recipes-nestjs.md) | NestJS: контроллеры, провайдеры, интерцепторы, middleware, Fastify |
 | [odata-support.md](./odata-support.md) | Матрица поддержки OData — что работает, что нет, что с оговорками |
 | [architecture.md](./architecture.md) | Как устроен конвейер и почему принято именно такое решение |
 | [CHANGELOG.md](../CHANGELOG.md) | Что менялось между версиями, включая ломающие изменения |
@@ -26,7 +28,8 @@
 
 ## С чего начать
 
-**Подключаю библиотеку в проект** → [recipes.md](./recipes.md), затем
+**Подключаю библиотеку в проект** → [recipes.md](./recipes.md) и рецепты своего фреймворка
+([Express](./recipes-express.md), [NestJS](./recipes-nestjs.md)), затем
 [odata-support.md](./odata-support.md), чтобы понимать границы.
 
 **Ищу сигнатуру или тип** → [api.md](./api.md).
