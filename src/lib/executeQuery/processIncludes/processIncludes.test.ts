@@ -41,7 +41,7 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: '*',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           parameters: new Map([['param1', 'value1']]),
         },
       ],
@@ -50,7 +50,7 @@ describe('processIncludes', () => {
     expect(mockQueryBuilder.leftJoinAndSelect).toHaveBeenCalledWith(
       `${alias}.items`,
       'itemsAlias',
-      'items.id = parent.id',
+      'itemsAlias.id = parent.id',
       { param1: 'value1' }
     );
     expect(mockQueryBuilder.addSelect).not.toHaveBeenCalled();
@@ -63,7 +63,7 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: 'id, name',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           parameters: new Map(),
         },
       ],
@@ -80,7 +80,7 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: '*',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           orderby: 'name asc, created desc',
         },
       ],
@@ -98,7 +98,7 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: '*',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           orderby: '1',
         },
       ],
@@ -119,13 +119,13 @@ describe('processIncludes', () => {
           navigationProperty: 'items',
           alias: 'itemsAlias',
           select: '*',
-          where: 'typeorm_query.id = parent.id',
+          where: 'itemsAlias.id = parent.id',
           includes: [
             {
               navigationProperty: 'subItems',
               alias: 'subAlias',
               select: 'id',
-              where: 'typeorm_query.parentId = itemsAlias.id',
+              where: 'subAlias.parentId = itemsAlias.id',
             },
           ],
         },

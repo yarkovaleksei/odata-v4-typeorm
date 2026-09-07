@@ -256,8 +256,8 @@ function referencedParentColumns(
  * @param relation - метаданные связи, к которой относится `$expand`.
  * @param parentAlias - SQL-алиас родительской таблицы.
  * @param include - дочерний посетитель; нужны только границы страницы и алиас связи.
- * @param fragments - те же `where` и `orderby`, но уже с раскрытым плейсхолдером `typeorm_query`,
- *   как их подставляет `processIncludes`.
+ * @param fragments - `where` и `orderby` дочернего посетителя, в том же виде, в каком
+ *   `processIncludes` отдаёт их в условие `ON`.
  * @returns условие с параметрами либо `undefined`, если перенос в SQL невозможен —
  *   тогда срез должен сделать `applyNestedPagination`.
  *

@@ -126,15 +126,12 @@ export const processIncludes = <T extends ObjectLiteral = ObjectLiteral>(
         );
       }
 
-      // 'typeorm_query' — плейсхолдер имени таблицы вложенного запроса, который подставлял
-      // базовый Visitor из odata-v4-sql. Собственный TypeOrmVisitor его больше не порождает:
-      // алиас связи он знает сам и пишет сразу (`Author_books.title`). Замена оставлена ради
-      // вызывающего кода, который строит посетителя вручную и мог на неё опираться, —
-      // на фрагментах из `createQuery` она не находит ничего.
-      // Раскрывается один раз: те же фрагменты уходят и в ON, и в подзапрос пагинации.
+      // Фрагменты берутся у посетителя как есть: алиас связи он знает сам и пишет сразу
+      // (`Author_books.title`). Собираются один раз — те же значения уходят и в ON,
+      // и в подзапрос вложенной пагинации.
       const fragments = {
-        where: item.where.replace(/typeorm_query/g, item.navigationProperty),
-        orderby: (item.orderby ?? '').replace(/typeorm_query/g, item.navigationProperty),
+        where: item.where,
+        orderby: item.orderby ?? '',
       };
 
       const on = withNestedPage(
