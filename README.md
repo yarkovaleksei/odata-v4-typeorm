@@ -313,6 +313,27 @@ const data = await executeQuery(dataSource.getRepository(User), req.query, {
 `allowedFields` покрывает не только `$select`, но и `$filter` с `$orderby`, включая поля
 внутри функций: `$filter=contains(passwordHash,'x')` будет отвергнут.
 
+### Связи без `$expand`
+
+Клиенту, который об OData не знает и ждёт «сущность целиком», связи можно отдавать
+автоматически — опцией `autoExpand`:
+
+```ts
+const data = await executeQuery(dataSource.getRepository(Book), req.query, {
+  alias: 'Book',
+  autoExpand: true,   // author, publisher, category, reviews, tags, details — без $expand
+});
+```
+
+Глубина — один уровень, как у `$expand=*` в OData v4: дописываются связи корня, но не связи
+связей. Следующие уровни запрашиваются явно (`$expand=reviews($expand=user)`), и это
+сочетается с опцией; вложенные опции клиента (`$expand=reviews($top=2)`) сохраняются,
+`allowedExpands` соблюдается.
+
+По умолчанию опция выключена: каждая связь — соединение, а связь «ко многим» умножает число
+строк в плоском результате. Включать её или нет, решает разработчик — он знает размер таблиц
+и структуру связей; на публичном API для того же есть `$expand`, который клиент указывает сам.
+
 ### NestJS
 
 ```ts

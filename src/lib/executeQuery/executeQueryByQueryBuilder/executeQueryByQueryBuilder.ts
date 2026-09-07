@@ -22,6 +22,7 @@ import { ODataInvalidQueryError, ODataUnsupportedError } from '../../errors';
 import { type TypeOrmVisitor, VISITOR_DEFAULTS } from '../../TypeOrmVisitor';
 import { applyNestedPagination } from '../applyNestedPagination';
 import { applyOrderBy } from '../applyOrderBy';
+import { withAutoExpand } from '../autoExpand';
 import type { ColumnTypeResolver, QueryParams } from '../../types';
 import { mapToObject } from '../mapToObject';
 import { processIncludes } from '../processIncludes';
@@ -712,6 +713,7 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
     searchFields,
     searchMode,
     searchLanguage,
+    autoExpand = false,
     nestedPaginationInSql = true,
   } = options ?? {};
   const alias = options?.alias || (inputQueryBuilder.expressionMap.mainAlias?.name ?? '');
@@ -730,7 +732,14 @@ export const executeQueryByQueryBuilder = async <T extends ObjectLiteral = Objec
   // и типы, которых компилятор OData не знает.
   const metadata = resolveMetadata(inputQueryBuilder, alias);
 
-  const odataString = queryToOdataString(parsedQueryWithoutSearch);
+  // `autoExpand` дописывает связи корня прямо в `$expand` — до разбора, а не после: так
+  // автоматические связи проходят тот же путь, что и присланные клиентом, и отдельной ветки
+  // в конвейере не появляется. Названные клиентом связи сохраняются вместе со своими опциями.
+  const expand = autoExpand
+    ? withAutoExpand(parsedQueryWithoutSearch.$expand, metadata, allowedExpands)
+    : parsedQueryWithoutSearch.$expand;
+
+  const odataString = queryToOdataString({ ...parsedQueryWithoutSearch, $expand: expand });
   const odataQuery = createQuery(odataString, {
     alias,
     dialect: inputQueryBuilder.connection.options.type,

@@ -11,7 +11,8 @@ import {
   ODataUnsupportedError,
   isODataClientError,
 } from '../../lib';
-import { Author, User } from '../fixtures';
+import type { ExecuteQueryOptions } from '../../lib';
+import { Author, Book, Category, User } from '../fixtures';
 import { dataSource } from '../setup/dataSource';
 import { authorIds, rows, unwrap } from './helpers';
 
@@ -392,5 +393,140 @@ describe('колонки с select: false', () => {
     );
 
     expect(result[0]).toEqual({ id: 1, name: 'Alice' });
+  });
+});
+
+/**
+ * `autoExpand` — «вернуть связи, не требуя `$expand`».
+ *
+ * Проверяется на {@link Book}: в ней сходятся все виды связей TypeORM — «многие к одному»
+ * (в том числе с UUID-ключом), «один ко многим», «многие ко многим» и «один к одному».
+ * Связи дописываются к `$expand` до разбора, поэтому здесь важно не только их наличие
+ * в ответе, но и то, что остальной конвейер продолжает работать как прежде.
+ */
+describe('autoExpand', () => {
+  const book = (query: Record<string, string>, options: Omit<ExecuteQueryOptions, 'alias'> = {}) =>
+    rows(dataSource.getRepository(Book), query, 'Book', options);
+
+  it('по умолчанию связи не возвращаются', async () => {
+    const [first] = await book({ $filter: 'id eq 1' });
+
+    expect(first!.author).toBeUndefined();
+    expect(first!.reviews).toBeUndefined();
+    expect(first!.tags).toBeUndefined();
+  });
+
+  it('возвращает все связи корня без единого $expand', async () => {
+    const [first] = await book({ $filter: 'id eq 1' }, { autoExpand: true });
+
+    expect(first!.author?.name).toBe('Ada');
+    expect(first!.publisher.name).toBe('Clarendon Press');
+    expect(first!.category?.name).toBe('Computing');
+    expect(first!.details?.isbn).toBe('9780000000001');
+    expect(first!.reviews.map((review) => review.id).sort()).toEqual([1, 2]);
+    expect(first!.tags.map((tag) => tag.label).sort()).toEqual(['classic', 'reference']);
+  });
+
+  /** `$expand` даёт LEFT JOIN, и автоматические связи не должны это менять. */
+  it('книга без автора и раздела остаётся в выдаче', async () => {
+    const [orphan] = await book({ $filter: 'id eq 5' }, { autoExpand: true });
+
+    expect(orphan!.author).toBeNull();
+    expect(orphan!.category).toBeNull();
+    expect(orphan!.details).toBeNull();
+    expect(orphan!.tags).toEqual([]);
+  });
+
+  /** Глубина — один уровень: связи связей по-прежнему запрашиваются явно. */
+  it('вглубь не рекурсирует, но явный вложенный $expand работает', async () => {
+    const [plain] = await book({ $filter: 'id eq 1' }, { autoExpand: true });
+
+    expect(plain!.reviews[0]!.user).toBeUndefined();
+
+    const [nested] = await book(
+      { $filter: 'id eq 1', $expand: 'reviews($expand=user)' },
+      { autoExpand: true }
+    );
+
+    expect(nested!.reviews[0]!.user?.name).toBe('Alice');
+  });
+
+  it('вложенные опции клиента сохраняются', async () => {
+    const [first] = await book(
+      { $filter: 'id eq 1', $expand: 'reviews($top=1;$orderby=id desc)' },
+      { autoExpand: true }
+    );
+
+    // Страница отзывов осталась от клиента, остальные связи добавлены целиком.
+    expect(first!.reviews.map((review) => review.id)).toEqual([2]);
+    expect(first!.author?.name).toBe('Ada');
+  });
+
+  /**
+   * Белый список ограничивает клиента, а не сервер: связь вне списка просто не дописывается,
+   * и запрос, в котором клиент ничего лишнего не просил, отвергать не за что.
+   */
+  it('добавляет только связи из allowedExpands и не отвергает запрос', async () => {
+    const [first] = await book(
+      { $filter: 'id eq 1' },
+      { autoExpand: true, allowedExpands: ['author'] }
+    );
+
+    expect(first!.author?.name).toBe('Ada');
+    expect(first!.publisher).toBeUndefined();
+    expect(first!.reviews).toBeUndefined();
+  });
+
+  it('связь вне списка по-прежнему отвергается, если её запросил клиент', async () => {
+    await expect(
+      executeQuery(
+        dataSource.getRepository(Book),
+        { $expand: 'tags' },
+        { alias: 'Book', autoExpand: true, allowedExpands: ['author'] }
+      )
+    ).rejects.toThrow(ODataInvalidQueryError);
+  });
+
+  /**
+   * Пагинация вместе с соединениями идёт у TypeORM в два шага, и связи «ко многим»
+   * умножают строки плоского результата: `$top` обязан остаться числом корневых сущностей.
+   */
+  it('$top считает корневые сущности, а не строки соединения', async () => {
+    const page = await book({ $top: '2', $orderby: 'id asc' }, { autoExpand: true });
+
+    expect(page.map((item) => item.id)).toEqual([1, 2]);
+    expect(page[0]!.tags).toHaveLength(2);
+  });
+
+  it('$select задаёт колонки корня и не отменяет связи', async () => {
+    const [first] = await book({ $select: 'id', $filter: 'id eq 1' }, { autoExpand: true });
+
+    expect(first!.title).toBeUndefined();
+    expect(first!.author?.name).toBe('Ada');
+  });
+
+  /** Ссылка сущности на саму себя: обоим соединениям нужны разные алиасы. */
+  it('работает на сущности со ссылкой на саму себя', async () => {
+    const [computing] = await rows(
+      dataSource.getRepository(Category),
+      { $filter: 'id eq 3' },
+      'Category',
+      { autoExpand: true }
+    );
+
+    expect(computing!.parent?.name).toBe('Science');
+    expect(computing!.children).toEqual([]);
+    expect(computing!.books.map((item) => item.id).sort()).toEqual([1, 3, 4]);
+  });
+
+  /** Автоматические связи идут тем же путём, что и явные, — значит скрытые колонки скрыты. */
+  it('не раскрывает колонки с select: false', async () => {
+    const [first] = await book(
+      { $filter: 'id eq 1', $expand: 'reviews($expand=user)' },
+      { autoExpand: true }
+    );
+
+    expect(first!.reviews[0]!.user?.name).toBe('Alice');
+    expect(JSON.stringify(first)).not.toContain('scrypt');
   });
 });
